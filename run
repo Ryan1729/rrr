@@ -1,0 +1,7 @@
+#!/bin/bash
+
+address=$(
+    ip -j a | jq '[[.[] | select(.operstate == ("UP")) | select(.flags[] | contains ("UP")) | .addr_info] | flatten | .[] | select(.scope == ("global")) | .local][0]' -r
+)
+
+cargo r -r -- "$address"
