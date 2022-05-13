@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, ToSocketAddrs};
+use rouille::{start_server, Response};
 
 type Res<A> = Result<A, Box<dyn std::error::Error>>;
 
@@ -15,7 +16,11 @@ fn main() -> Res<()> {
                 .ok_or_else(|| "No socket address found")?
         };
 
-        println!("{addr:?}");
+        start_server(addr, move |request| {
+            Response::text(&format!(
+                "hello world\n{request:?}"
+            ))
+        });
     } else {
         println!("usage: rrr <address>");
     };
