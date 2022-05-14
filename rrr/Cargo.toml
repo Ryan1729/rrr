@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rouille = "3.5.0"
+logic = { path = "../logic" }
 directories = "4.0.1"
+rouille = "3.5.0"
+

@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
-use rouille::{start_server, Response};
+use rouille::{start_server, try_or_400, Request, Response};
 
 type Res<A> = Result<A, Box<dyn std::error::Error>>;
 
@@ -51,19 +51,75 @@ fn inner_main() -> Res<()> {
     }
     let data_dir = data_dir.canonicalize()?;
 
-    println!("Data Directory: {}", data_dir.display());
+    let displayed_dir = data_dir.display().to_string();
 
-    start(addr, data_dir)
+    let state = logic::State::try_from(data_dir)
+        .map_err(|logic::MustBeDirError()| "data_dir must be a dir")?;
+
+    println!("Data Directory: {displayed_dir}");
+
+    start(addr, state)
 }
 
 fn first_addr(to_addrs: impl ToSocketAddrs) -> Option<SocketAddr> {
     to_addrs.to_socket_addrs().ok()?.next()
 }
 
-fn start(addr: SocketAddr, data_dir: PathBuf) -> ! {
+fn start(addr: SocketAddr, state: logic::State) -> ! {
+    let state_mutex = std::sync::Mutex::new(state);
+
     start_server(addr, move |request| {
-        Response::text(&format!(
-            "hello world\n{request:?}\n{data_dir:?}"
-        ))
+        let task: logic::Task = try_or_400!(extract_task(&request));
+
+        match state_mutex.lock() {
+            Ok(ref mut state) => {
+                let output: logic::Output = state.perform(task);
+
+                extract_response(output)
+            }
+            Err(e) => {
+                Response::text(e.to_string()).with_status_code(503)
+            }
+        }
     })
+}
+
+/// This exisits because if we try to use `Box<dyn std::error::Error>` we get
+/// "the size for values of type `dyn std::error::Error` cannot be known at
+/// compilation time" from `try_or_400`.
+#[derive(Debug)]
+struct TaskError(String);
+
+impl core::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for TaskError {}
+
+fn extract_task(request: &Request) -> Result<logic::Task, TaskError> {
+    use logic::Task::*;
+
+    let url = request.url();
+    match (request.method(), url.as_str()) {
+        ("GET", "/") => {
+            Ok(ShowHomePage)
+        },
+        (method, _) => {
+            Err(TaskError(
+                format!(
+                    "No known task for HTTP {method} method at url {url}"
+                )
+            ))
+        },
+    }
+}
+
+fn extract_response(output: logic::Output) -> Response {
+    use logic::Output::*;
+
+    match output {
+        Html(html) => Response::html(html),
+    }
 }
