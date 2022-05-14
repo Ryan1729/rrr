@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 rouille = "3.5.0"
+directories = "4.0.1"
