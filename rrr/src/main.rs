@@ -4,6 +4,16 @@ use rouille::{start_server, Response};
 type Res<A> = Result<A, Box<dyn std::error::Error>>;
 
 fn main() -> Res<()> {
+    let result = inner_main();
+
+    if result.is_err() {
+        println!("usage: rrr <address>");
+    }
+
+    result
+}
+
+fn inner_main() -> Res<()> {
     let mut args = std::env::args();
 
     args.next(); // exe name
@@ -13,7 +23,7 @@ fn main() -> Res<()> {
             addr
         } else {
             first_addr((addr_str, 8080))
-                .ok_or_else(|| "No socket address found")?
+                .ok_or_else(|| "No valid socket address found")?
         };
 
         start_server(addr, move |request| {
@@ -22,10 +32,8 @@ fn main() -> Res<()> {
             ))
         });
     } else {
-        println!("usage: rrr <address>");
-    };
-
-    Ok(())
+        Err("No socket address found".into())
+    }
 }
 
 fn first_addr(to_addrs: impl ToSocketAddrs) -> Option<SocketAddr> {
