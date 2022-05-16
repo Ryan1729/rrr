@@ -1,22 +1,83 @@
 use std::path::PathBuf;
 
-pub struct State {
-    root: PathBuf,
+pub struct Root(PathBuf);
+
+impl Root {
+    fn path_to(&self, file_name: impl AsRef<std::path::Path>) -> PathBuf {
+        self.0.join(file_name)
+    }
+
+    fn display(&self) -> impl core::fmt::Display + '_ {
+        self.0.display()
+    }
 }
 
 pub struct MustBeDirError();
 
-impl TryFrom<PathBuf> for State {
+impl TryFrom<PathBuf> for Root {
     type Error = MustBeDirError;
 
     fn try_from(root: PathBuf) -> Result<Self, Self::Error> {
         if !root.is_dir() {
             Err(MustBeDirError())
         } else {
-            Ok(Self {
-                root
-            })
+            Ok(Self(root))
         }
+    }
+}
+
+// TODO struct containing a collection of parsed feeds.
+pub type RemoteFeeds = String;
+
+pub struct State {
+    root: Root,
+    remote_feeds: RemoteFeeds,
+}
+
+#[derive(Debug)]
+pub enum StateCreationError {
+    RootMustBeDir,
+    Io(std::io::Error)
+}
+
+impl core::fmt::Display for StateCreationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RootMustBeDir => write!(f, "Root dir must be a dir"),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for StateCreationError {}
+
+const REMOTE_FEEDS: &str = "remote-feeds";
+
+impl TryFrom<PathBuf> for State {
+    type Error = StateCreationError;
+
+    fn try_from(root: PathBuf) -> Result<Self, Self::Error> {
+        let root = Root::try_from(root)
+            .map_err(|MustBeDirError()| Self::Error::RootMustBeDir)?;
+
+        let mut remote_feeds_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root.path_to(REMOTE_FEEDS))
+            .map_err(Self::Error::Io)?;
+
+        let mut remote_feeds = String::with_capacity(1024);
+
+        std::io::Read::read_to_string(
+            &mut remote_feeds_file,
+            &mut remote_feeds
+        ).map_err(Self::Error::Io)?;
+
+        Ok(Self {
+            root,
+            remote_feeds,
+        })
     }
 }
 
@@ -27,8 +88,6 @@ pub enum Output {
 pub enum Task {
     ShowHomePage
 }
-
-const REMOTE_FEEDS: &str = "remote-feeds";
 
 impl State {
     pub fn perform(&mut self, task: Task) -> Output {
@@ -68,23 +127,15 @@ fn main_template(body: &str) -> Output {
     )
 }
 
-impl State {
-    fn path_to(&self, file_name: impl AsRef<std::path::Path>) -> PathBuf {
-        self.root.join(file_name)
-    }
-}
-
 // Might make this a struct that impls Display or something later.
 type Feeds = String;
 
 fn render_feeds(state: &State) -> Feeds {
     fn inner(state: &State) -> std::io::Result<Feeds> {
         let mut output = Feeds::with_capacity(1024);
-        // TODO move I/O out of this module
-        let remote_feeds = std::fs::read_to_string(state.path_to(REMOTE_FEEDS))?;
 
-        // TODO fetch feed (elsewhere), parse content render it.
-        for line in remote_feeds.lines() {
+        // TODO fetch feed (elsewhere), parse content, render it.
+        for line in state.remote_feeds.lines() {
             output.push_str("<a href=");
             output.push_str(line);
             output.push_str(">");

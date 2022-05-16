@@ -53,8 +53,7 @@ fn inner_main() -> Res<()> {
 
     let displayed_dir = data_dir.display().to_string();
 
-    let state = logic::State::try_from(data_dir)
-        .map_err(|logic::MustBeDirError()| "data_dir must be a dir")?;
+    let state = logic::State::try_from(data_dir)?;
 
     println!("Data Directory: {displayed_dir}");
 
