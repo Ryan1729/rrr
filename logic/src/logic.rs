@@ -34,6 +34,21 @@ pub struct State {
     remote_feeds: RemoteFeeds,
 }
 
+impl render::Data for State {
+    type Error = String;
+    type RootDisplay = String;
+
+    fn feeds(&self) -> Result<&str, Self::Error> {
+        // We expect we might have a parse error here instead or something.
+
+        Ok(&self.remote_feeds)
+    }
+
+    fn root_display(&self) -> Self::RootDisplay {
+        format!("{}", self.root.display())
+    }
+}
+
 #[derive(Debug)]
 pub enum StateCreationError {
     RootMustBeDir,
@@ -85,6 +100,20 @@ pub enum Output {
     Html(String),
 }
 
+impl core::fmt::Write for Output {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        match self {
+            Self::Html(ref mut output) => {
+                output.push_str(s);
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl render::Output for Output {}
+
 pub enum Task {
     ShowHomePage
 }
@@ -95,58 +124,12 @@ impl State {
 
         match task {
             ShowHomePage => {
-                let feeds = render_feeds(&self);
+                let mut output = Output::Html(String::with_capacity(1024));
 
-                main_template(&format!(
-                    "{feeds}\
-                     <footer>{}</footer>",
-                    &self.root.display().to_string()
-                ))
+                render::home_page(&mut output, self);
+
+                output
             }
         }
-    }
-}
-
-fn main_template(body: &str) -> Output {
-    // Many tags can officially be omitted. If the browsers display it properly, why
-    // send extra bytes?
-    // See https://html.spec.whatwg.org/multipage/syntax.html#syntax-tag-omission
-    const HEADER: &str = "\
-        <!DOCTYPE HTML>\
-        <style> body { color: #eee; background-color: #222 } </style>
-        <title>RRR</title>\n\
-    ";
-
-    let mut output = String::with_capacity(HEADER.len() + body.len());
-
-    output.push_str(HEADER);
-    output.push_str(body);
-
-    Output::Html(
-        output
-    )
-}
-
-// Might make this a struct that impls Display or something later.
-type Feeds = String;
-
-fn render_feeds(state: &State) -> Feeds {
-    fn inner(state: &State) -> std::io::Result<Feeds> {
-        let mut output = Feeds::with_capacity(1024);
-
-        // TODO fetch feed (elsewhere), parse content, render it.
-        for line in state.remote_feeds.lines() {
-            output.push_str("<a href=");
-            output.push_str(line);
-            output.push_str(">");
-            output.push_str(line);
-            output.push_str("</a>");
-        }
-
-        Ok(output)
-    }
-    match inner(state) {
-        Ok(v) => v,
-        Err(e) => e.to_string(),
     }
 }
