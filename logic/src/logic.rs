@@ -124,7 +124,8 @@ impl State {
 
         match task {
             ShowHomePage => {
-                let mut output = Output::Html(String::with_capacity(1024));
+                // 64k ought to be enough for anybody!
+                let mut output = Output::Html(String::with_capacity(65536));
 
                 render::home_page(&mut output, self);
 
