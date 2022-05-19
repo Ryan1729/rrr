@@ -1,0 +1,11 @@
+[package]
+name = "syndicated"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/syndicated.rs"
+
+[dependencies]
+rss = "2.0"
+atom_syndication = "0.11"

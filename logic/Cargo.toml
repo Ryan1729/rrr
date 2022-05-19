@@ -7,4 +7,7 @@ edition = "2021"
 path = "src/logic.rs"
 
 [dependencies]
+fetch = { path = "../fetch" }
 render = { path = "../render" }
+syndicated = { path = "../syndicated" }
+

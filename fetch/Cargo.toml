@@ -1,0 +1,12 @@
+[package]
+name = "fetch"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/fetch.rs"
+
+[dependencies]
+once_cell = "1.10.0"
+ureq = "2.4.0"
+url = "2.2.2"

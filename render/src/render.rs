@@ -11,16 +11,18 @@ pub trait Output: core::fmt::Write {}
 /// A way to access the data we need for rendering.
 pub trait Data
 where
-    Self::Error: Display,
     Self::RootDisplay: Display,
  {
-    type Error;
     type RootDisplay;
 
-    fn feeds(&self) -> Result<&str, Self::Error>;
+    fn items(&self) -> &[Item<'_>];
 
     fn root_display(&self) -> Self::RootDisplay;
 }
+
+// TODO struct with fields we can decide to render in different ways at different 
+// times.
+pub type Item<'item> = &'item str;
 
 pub fn home_page(output: &mut impl Output, data: &impl Data) {
     main_template(
@@ -55,16 +57,8 @@ where O: Output
 }
 
 pub fn feeds(output: &mut impl Output, data: &impl Data) {
-    match data.feeds() {
-        Ok(feeds) => {
-            // TODO fetch feed (elsewhere), parse content, render it.
-            for line in feeds.lines() {
-                write!(output, "<a href={line}>{line}</a>");
-            }
-        },
-        Err(e) => {
-            write!(output, "{e}");
-        },
+    for item in data.items() {
+        write!(output, "<p>{item}</p>");
     }
 }
 
