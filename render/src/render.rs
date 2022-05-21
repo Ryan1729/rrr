@@ -8,23 +8,75 @@ use core::fmt::Display;
 /// A way to incrementally output HTML.
 pub trait Output: core::fmt::Write {}
 
+/// A way to access a `Post` which may or may not ultimately own it.
+pub trait PostHolder<Link>
+where
+    Link: AsRef<str>
+{
+    fn get_post(&self) -> Post<'_, Link>;
+}
+
 /// A way to access the data we need for rendering.
-pub trait Data
+pub trait Data<'posts>
 where
     Self::RootDisplay: Display,
- {
+    Self::PostHolder: PostHolder<Self::Link>,
+    Self::Link: AsRef<str>,
+{
     type RootDisplay;
+    type PostHolder;
+    type Link;
 
-    fn items(&self) -> &[Item<'_>];
+    fn posts(&self) -> &[Self::PostHolder];
 
     fn root_display(&self) -> Self::RootDisplay;
 }
 
-// TODO struct with fields we can decide to render in different ways at different 
-// times.
-pub type Item<'item> = &'item str;
+/// This may be an overly naive representation. But it seems best to go with the
+/// simplest option that works for the feeds I want to read. We can extend/improve
+/// this as needed.
+pub struct Post<'post, Link> {
+    pub title: Option<&'post str>,
+    pub summary: Option<&'post str>,
+    pub content: Option<&'post str>,
+    pub links: &'post [Link]
+}
 
-pub fn home_page(output: &mut impl Output, data: &impl Data) {
+pub fn feeds<'data>(output: &mut impl Output, data: &impl Data<'data>) {
+    for (i, post) in data.posts().iter().enumerate() {
+        let post = post.get_post();
+        write!(output, "<p>#{i}");
+
+        let mut links = post.links;
+
+        if let Some(title) = post.title {
+            if let Some(link) = links.get(0) {
+                let link = link.as_ref();
+                write!(output, "<h2><a href=\"{link}\">{title}</a></h2>");
+                links = &links[1..];
+            } else {
+                write!(output, "<h2>{title}</h2>");
+            }
+        }
+
+        if let Some(summary) = post.summary {
+            write!(output, "<h3>{summary}</h3>");
+        }
+
+        if let Some(content) = post.content {
+            write!(output, "<p>{content}</p>");
+        }
+
+        for (i, link) in links.iter().enumerate() {
+            let link = link.as_ref();
+            write!(output, "<a href=\"{link}\">{}</a>", i + 1);
+        }
+
+        write!(output, "</p>");
+    }
+}
+
+pub fn home_page<'data>(output: &mut impl Output, data: &impl Data<'data>) {
     main_template(
         output,
         |o| {
@@ -56,11 +108,6 @@ where O: Output
     body(output);
 }
 
-pub fn feeds(output: &mut impl Output, data: &impl Data) {
-    for item in data.items() {
-        write!(output, "<p>{item}</p>");
-    }
-}
 
 
 

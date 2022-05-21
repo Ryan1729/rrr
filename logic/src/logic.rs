@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use fetch::Url;
-use syndicated::{Channel};
+use syndicated::Post;
 
 pub struct Root(PathBuf);
 
@@ -33,7 +33,7 @@ pub type RemoteFeeds = Vec<Url>;
 pub struct State {
     root: Root,
     remote_feeds: RemoteFeeds,
-    items: Vec<String>, 
+    posts: Vec<syndicated::Post>,
 }
 
 #[derive(Debug)]
@@ -41,7 +41,6 @@ pub enum StateCreationError {
     RootMustBeDir,
     Io(std::io::Error),
     UrlParse(fetch::UrlParseError),
-    Syndicated(syndicated::Error),
     Fetch(fetch::Error),
 }
 
@@ -51,7 +50,6 @@ impl core::fmt::Display for StateCreationError {
             Self::RootMustBeDir => write!(f, "Root dir must be a dir"),
             Self::Io(e) => write!(f, "{e}"),
             Self::UrlParse(e) => write!(f, "{e}"),
-            Self::Syndicated(e) => write!(f, "{e}"),
             Self::Fetch(e) => write!(f, "{e}"),
         }
     }
@@ -92,31 +90,26 @@ impl TryFrom<PathBuf> for State {
             );
         }
 
-        let mut items = Vec::with_capacity(1024);
+        let mut posts = Vec::with_capacity(1024);
 
         for feed in &remote_feeds {
-            let channel = Channel::read_from(
-                fetch::get(feed)
-                    .map_err(Self::Error::Fetch)?
-            ).map_err(Self::Error::Syndicated)?;
+            use std::io::Read;
+            let mut reader = fetch::get(feed)
+                .map_err(Self::Error::Fetch)?;
 
-            for item in channel.items {
-                let s = item.content.unwrap_or_else(||
-                    item.description.unwrap_or_else(||
-                        item.link.unwrap_or_default()
-                    )
-                );
+            let mut buffer = String::with_capacity(4096);
+            reader.read_to_string(&mut buffer);
 
-                if s.is_empty() { continue; }
-
-                items.push(s);
-            }
+            syndicated::parse_items(
+                std::io::Cursor::new(&buffer),
+                &mut posts,
+            );
         }
 
         Ok(Self {
             root,
             remote_feeds,
-            items,
+            posts,
         })
     }
 }
@@ -143,16 +136,18 @@ pub enum Task {
     ShowHomePage
 }
 
-struct Data<'root, 'items, 'item> {
+struct Data<'root, 'posts> {
     root: &'root Root,
-    items: &'items [render::Item<'item>],
+    posts: &'posts [Post],
 }
 
-impl <'items, 'item> render::Data for Data<'_, 'items, 'item> {
+impl <'posts> render::Data<'_> for Data<'_, 'posts> {
     type RootDisplay = String;
+    type PostHolder = Post;
+    type Link = String;
 
-    fn items(&self) -> &'items [render::Item<'item>] {
-        self.items
+    fn posts(&self) -> &'posts [Post] {
+        self.posts
     }
 
     fn root_display(&self) -> Self::RootDisplay {
@@ -169,14 +164,9 @@ impl State {
                 // 64k ought to be enough for anybody!
                 let mut output = Output::Html(String::with_capacity(65536));
 
-                let items: Vec<&str> = self.items.iter().map(|s| {
-                    let s: &str = s; 
-                    s
-                }).collect();
-
                 render::home_page(
                     &mut output,
-                    &Data { root: &self.root, items: &items }
+                    &Data { root: &self.root, posts: &self.posts }
                 );
 
                 output
