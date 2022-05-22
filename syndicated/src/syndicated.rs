@@ -1,6 +1,7 @@
 use atom_syndication::Feed;
 use rss::Channel;
 
+#[derive(Debug)]
 pub struct Post {
     pub title: Option<String>,
     pub summary: Option<String>,

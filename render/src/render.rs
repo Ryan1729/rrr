@@ -103,6 +103,11 @@ pub fn home_page<'data>(
     )
 }
 
+pub mod keys {
+    pub const REFRESH: &str = "refresh";
+}
+use keys::*;
+
 fn main_template<O>(
     output: &mut O,
     body: impl FnOnce(&mut O) -> Result
@@ -120,8 +125,19 @@ where O: Output
 
     output.write_str(HEADER)?;
 
-    body(output)?;
+    write!(
+        output,
+        "\
+        <form>\
+          <div>\
+            <button type='submit'>Refresh</button>\
+          </div>\
+          <input type='hidden' name='{REFRESH}'>\
+        </form>\
+        "
+    )?;
 
+    body(output)?;
 
     // TODO show estimated render time on floating thing that is hidden until you
     // hover over a small thing

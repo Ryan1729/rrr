@@ -28,7 +28,47 @@ impl TryFrom<PathBuf> for Root {
     }
 }
 
-pub type RemoteFeeds = Vec<Url>;
+type RemoteFeeds = Vec<Url>;
+type Posts = Vec<syndicated::Post>;
+
+enum FetchRemoteFeedsError {
+    Io(std::io::Error),
+    Fetch(fetch::Error),
+}
+
+impl core::fmt::Display for FetchRemoteFeedsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Fetch(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// `output` will be cleared before being filled with the current posts.
+fn fetch_remote_feeds(
+    output: &mut Posts,
+    remote_feeds: &RemoteFeeds
+) -> Result<(), FetchRemoteFeedsError> {
+    output.clear();
+
+    for feed in remote_feeds {
+        use std::io::Read;
+        let mut reader = fetch::get(feed)
+            .map_err(FetchRemoteFeedsError::Fetch)?;
+
+        let mut buffer = String::with_capacity(4096);
+        reader.read_to_string(&mut buffer)
+            .map_err(FetchRemoteFeedsError::Io)?;
+
+        syndicated::parse_items(
+            std::io::Cursor::new(&buffer),
+            output,
+        );
+    }
+
+    Ok(())
+}
 
 pub struct State {
     root: Root,
@@ -36,7 +76,7 @@ pub struct State {
     // re-parsing.
     #[allow(unused)]
     remote_feeds: RemoteFeeds,
-    posts: Vec<syndicated::Post>,
+    posts: Posts,
 }
 
 #[derive(Debug)]
@@ -59,6 +99,16 @@ impl core::fmt::Display for StateCreationError {
 }
 
 impl std::error::Error for StateCreationError {}
+
+impl From<FetchRemoteFeedsError> for StateCreationError {
+    fn from(e: FetchRemoteFeedsError) -> Self {
+        use FetchRemoteFeedsError as E;
+        match e {
+            E::Io(e) => Self::Io(e),
+            E::Fetch(e) => Self::Fetch(e),
+        }
+    }
+}
 
 const REMOTE_FEEDS: &str = "remote-feeds";
 
@@ -95,20 +145,7 @@ impl TryFrom<PathBuf> for State {
 
         let mut posts = Vec::with_capacity(1024);
 
-        for feed in &remote_feeds {
-            use std::io::Read;
-            let mut reader = fetch::get(feed)
-                .map_err(Self::Error::Fetch)?;
-
-            let mut buffer = String::with_capacity(4096);
-            reader.read_to_string(&mut buffer)
-                .map_err(Self::Error::Io)?;
-
-            syndicated::parse_items(
-                std::io::Cursor::new(&buffer),
-                &mut posts,
-            );
-        }
+        fetch_remote_feeds(&mut posts, &remote_feeds)?;
 
         Ok(Self {
             root,
@@ -136,8 +173,69 @@ impl core::fmt::Write for Output {
 
 impl render::Output for Output {}
 
+#[derive(Debug)]
+pub struct Refresh;
+
+#[derive(Debug)]
 pub enum Task {
-    ShowHomePage
+    ShowHomePage(Option<Refresh>),
+}
+
+pub enum Method {
+    Get,
+//    Post,
+    Other,
+}
+
+impl core::fmt::Display for Method {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Get => write!(f, "GET"),
+            Self::Other => write!(f, "???"),
+        }
+    }
+}
+
+pub trait TaskSpec {
+    fn method(&self) -> Method;
+    fn url_suffix(&self) -> String;
+    fn query_param(&self, key: &str) -> Option<String>;
+}
+
+#[derive(Debug)]
+pub struct TaskError(String);
+
+impl core::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for TaskError {}
+
+pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
+    use Task::*;
+    
+    use render::keys;
+
+    let mut extra = None;
+    if let Some(_) = spec.query_param(keys::REFRESH) {
+        extra = Some(Refresh);
+    }
+
+    let url = spec.url_suffix();
+    match (spec.method(), url.as_ref()) {
+        (Method::Get, "/") => {
+            Ok(ShowHomePage(extra))
+        },
+        (method, _) => {
+            Err(TaskError(
+                format!(
+                    "No known task for HTTP {method} method at url {url}"
+                )
+            ))
+        },
+    }
 }
 
 struct Data<'root, 'posts> {
@@ -159,22 +257,54 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
     }
 }
 
+#[derive(Debug)]
+pub enum PerformError {
+    Io(std::io::Error),
+    Fetch(fetch::Error),
+    Render(render::Error),
+}
+
+impl core::fmt::Display for PerformError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Fetch(e) => write!(f, "{e}"),
+            Self::Render(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for PerformError {}
+
+impl From<FetchRemoteFeedsError> for PerformError {
+    fn from(e: FetchRemoteFeedsError) -> Self {
+        use FetchRemoteFeedsError as E;
+        match e {
+            E::Io(e) => Self::Io(e),
+            E::Fetch(e) => Self::Fetch(e),
+        }
+    }
+}
+
 impl State {
-    pub fn perform(&mut self, task: Task) -> render::Result<Output> {
+    pub fn perform(&mut self, task: Task) -> Result<Output, PerformError> {
         use Task::*;
 
         match task {
-            ShowHomePage => {
-                // 64k ought to be enough for anybody!
-                let mut output = Output::Html(String::with_capacity(65536));
-
-                render::home_page(
-                    &mut output,
-                    &Data { root: &self.root, posts: &self.posts }
-                )?;
-
-                Ok(output)
+            ShowHomePage(None) => {}
+            ShowHomePage(Some(Refresh)) => {
+                fetch_remote_feeds(&mut self.posts, &self.remote_feeds)?;
             }
         }
+
+        // 64k ought to be enough for anybody!
+        let mut output = Output::Html(String::with_capacity(65536));
+
+        render::home_page(
+            &mut output,
+            &Data { root: &self.root, posts: &self.posts }
+        ).map_err(PerformError::Render)?;
+
+        Ok(output)
     }
 }

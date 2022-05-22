@@ -2,6 +2,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use rouille::{start_server, try_or_400, Request, Response};
 
+use logic::Method;
+
 type Res<A> = Result<A, Box<dyn std::error::Error>>;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -64,11 +66,33 @@ fn first_addr(to_addrs: impl ToSocketAddrs) -> Option<SocketAddr> {
     to_addrs.to_socket_addrs().ok()?.next()
 }
 
+#[repr(transparent)]
+struct TaskSpec<'request>(&'request Request);
+
+impl <'request> logic::TaskSpec for TaskSpec<'request> {
+    fn method(&self) -> Method {
+        match self.0.method() {
+            "GET" => Method::Get,
+            _ => Method::Other,
+        }
+    }
+
+    fn url_suffix(&self) -> String {
+        self.0.url()
+    }
+
+    fn query_param(&self, key: &str) -> Option<String> {
+        self.0.get_param(key)
+    }
+}
+
 fn start(addr: SocketAddr, state: logic::State) -> ! {
     let state_mutex = std::sync::Mutex::new(state);
 
     start_server(addr, move |request| {
-        let task: logic::Task = try_or_400!(extract_task(&request));
+        let task: logic::Task = try_or_400!(
+            logic::extract_task(&TaskSpec(&request))
+        );
 
         match state_mutex.lock() {
             Ok(ref mut state) => {
@@ -84,38 +108,6 @@ fn start(addr: SocketAddr, state: logic::State) -> ! {
             }
         }
     })
-}
-
-/// This exisits because if we try to use `Box<dyn std::error::Error>` we get
-/// "the size for values of type `dyn std::error::Error` cannot be known at
-/// compilation time" from `try_or_400`.
-#[derive(Debug)]
-struct TaskError(String);
-
-impl core::fmt::Display for TaskError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for TaskError {}
-
-fn extract_task(request: &Request) -> Result<logic::Task, TaskError> {
-    use logic::Task::*;
-
-    let url = request.url();
-    match (request.method(), url.as_str()) {
-        ("GET", "/") => {
-            Ok(ShowHomePage)
-        },
-        (method, _) => {
-            Err(TaskError(
-                format!(
-                    "No known task for HTTP {method} method at url {url}"
-                )
-            ))
-        },
-    }
 }
 
 fn extract_response(output: logic::Output) -> Response {
