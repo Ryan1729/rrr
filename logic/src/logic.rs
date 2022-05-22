@@ -32,6 +32,9 @@ pub type RemoteFeeds = Vec<Url>;
 
 pub struct State {
     root: Root,
+    // We plan to re-fetch from the feeds during runtime, so we'll want to avoid
+    // re-parsing.
+    #[allow(unused)]
     remote_feeds: RemoteFeeds,
     posts: Vec<syndicated::Post>,
 }
@@ -98,7 +101,8 @@ impl TryFrom<PathBuf> for State {
                 .map_err(Self::Error::Fetch)?;
 
             let mut buffer = String::with_capacity(4096);
-            reader.read_to_string(&mut buffer);
+            reader.read_to_string(&mut buffer)
+                .map_err(Self::Error::Io)?;
 
             syndicated::parse_items(
                 std::io::Cursor::new(&buffer),
@@ -121,7 +125,7 @@ pub enum Output {
 impl core::fmt::Write for Output {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         match self {
-            Self::Html(ref mut output) => {
+            Output::Html(ref mut output) => {
                 output.push_str(s);
 
                 Ok(())
@@ -156,7 +160,7 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
 }
 
 impl State {
-    pub fn perform(&mut self, task: Task) -> Output {
+    pub fn perform(&mut self, task: Task) -> render::Result<Output> {
         use Task::*;
 
         match task {
@@ -167,9 +171,9 @@ impl State {
                 render::home_page(
                     &mut output,
                     &Data { root: &self.root, posts: &self.posts }
-                );
+                )?;
 
-                output
+                Ok(output)
             }
         }
     }

@@ -72,9 +72,12 @@ fn start(addr: SocketAddr, state: logic::State) -> ! {
 
         match state_mutex.lock() {
             Ok(ref mut state) => {
-                let output: logic::Output = state.perform(task);
-
-                extract_response(output)
+                match state.perform(task) {
+                    Ok(output) => extract_response(output),
+                    Err(e) => {
+                        Response::text(e.to_string()).with_status_code(500)
+                    }
+                }
             }
             Err(e) => {
                 Response::text(e.to_string()).with_status_code(503)
