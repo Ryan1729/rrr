@@ -1,12 +1,13 @@
-use time::OffsetDateTime as ODT;
-pub use time::error::IndeterminateOffset;
-
-pub const DEFAULT: Timestamp = Timestamp(ODT::UNIX_EPOCH);
+use time::{OffsetDateTime as ODT, UtcOffset as UO};
 
 /// A local-time timestamp.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Timestamp(ODT);
+
+impl Timestamp {
+    pub const DEFAULT: Timestamp = Timestamp(ODT::UNIX_EPOCH);
+}
 
 impl core::fmt::Display for Timestamp {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -28,18 +29,41 @@ impl core::fmt::Display for Timestamp {
 
         self.0.format_into(&mut W(f), &time::format_description::well_known::Rfc3339)
             .map(|_| ())
-            .map_err(|_| core::fmt::Error)
+            .map_err(|_| core::fmt::Error)?;
+
+        // Yes, the Z indicates UTC, but I want it to be more obvious
+        if self.0.offset() == time::UtcOffset::UTC {
+            write!(f, " UTC")?;
+        }
+
+        Ok(())
     }
 }
 
 impl Default for Timestamp {
     fn default() -> Self {
-        DEFAULT
+        Self::DEFAULT
     }
 }
 
 impl Timestamp {
-    pub fn now() -> Result<Self, IndeterminateOffset> {
-        ODT::now_local().map(Self)
+    pub fn now_at_offset(UtcOffset(offset): UtcOffset) -> Self {
+        Self(ODT::now_utc().to_offset(offset))
+    }
+}
+
+/// An offset from UTC. Essentially a timezone, without associted metadata.
+#[derive(Copy, Clone, Debug)]
+#[repr(transparent)]
+pub struct UtcOffset(UO);
+
+impl UtcOffset {
+    // This will currently always return the UTC offset, (that is, offset the time by
+    // no offet at all) if there is more than one thread.
+    pub fn current_local_or_utc() -> Self {
+        Self(
+            UO::current_local_offset()
+                .unwrap_or(UO::UTC)
+        )
     }
 }

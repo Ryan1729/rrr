@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use fetch::Url;
 use syndicated::Post;
-use timestamp::Timestamp;
+use timestamp::{Timestamp, UtcOffset};
 
 pub struct Root(PathBuf);
 
@@ -52,13 +52,14 @@ impl core::fmt::Display for FetchRemoteFeedsError {
 /// `output` will be cleared before being filled with the current posts.
 fn fetch_remote_feeds(
     output: &mut Posts,
-    remote_feeds: &RemoteFeeds
+    remote_feeds: &RemoteFeeds,
+    utc_offset: UtcOffset,
 ) -> Result<(), FetchRemoteFeedsError> {
     output.posts.clear();
 
     // Set the timestamp first, so that if we add an auto refresh later, errors won't
     // cause a tight retry loop.
-    output.fetched_at = Timestamp::now().map_err(|e| dbg!(e)).unwrap_or_default();
+    output.fetched_at = Timestamp::now_at_offset(utc_offset);
 
     for feed in remote_feeds {
         use std::io::Read;
@@ -80,11 +81,9 @@ fn fetch_remote_feeds(
 
 pub struct State {
     root: Root,
-    // We plan to re-fetch from the feeds during runtime, so we'll want to avoid
-    // re-parsing.
-    #[allow(unused)]
     remote_feeds: RemoteFeeds,
     posts: Posts,
+    utc_offset: UtcOffset,
 }
 
 #[derive(Debug)]
@@ -153,15 +152,18 @@ impl TryFrom<PathBuf> for State {
 
         let mut posts = Posts{
             posts: Vec::with_capacity(1024),
-            fetched_at: timestamp::DEFAULT,
+            fetched_at: Timestamp::DEFAULT,
         };
 
-        fetch_remote_feeds(&mut posts, &remote_feeds)?;
+        let utc_offset = UtcOffset::current_local_or_utc();
+
+        fetch_remote_feeds(&mut posts, &remote_feeds, utc_offset)?;
 
         Ok(Self {
             root,
             remote_feeds,
             posts,
+            utc_offset,
         })
     }
 }
@@ -309,7 +311,11 @@ impl State {
         match task {
             ShowHomePage(None) => {}
             ShowHomePage(Some(Refresh)) => {
-                fetch_remote_feeds(&mut self.posts, &self.remote_feeds)?;
+                fetch_remote_feeds(
+                    &mut self.posts,
+                    &self.remote_feeds,
+                    self.utc_offset,
+                )?;
             }
         }
 
