@@ -24,16 +24,20 @@ where
 pub trait Data<'posts>
 where
     Self::RootDisplay: Display,
+    Self::Timestamp: Display,
     Self::PostHolder: PostHolder<Self::Link>,
     Self::Link: AsRef<str>,
 {
-    type RootDisplay;
     type PostHolder;
     type Link;
+    type RootDisplay;
+    type Timestamp;
 
     fn posts(&self) -> &[Self::PostHolder];
 
     fn root_display(&self) -> Self::RootDisplay;
+
+    fn load_timestamp(&self) -> Self::Timestamp;
 }
 
 /// This may be an overly naive representation. But it seems best to go with the
@@ -46,15 +50,22 @@ pub struct Post<'post, Link> {
     pub links: &'post [Link]
 }
 
-fn controls(
+fn controls<'data>(
     output: &mut impl Output,
+    data: &impl Data<'data>
 ) -> Result {
-    // TODO Use `time` crate to write out when the feeds were refreshed
+    let load_timestamp = data.load_timestamp();
+
     write!(
         output,
         "\
         <form>\
-          <button type='submit'>Refresh</button>\
+          <button \
+            type='submit' \
+            title='Fresh as of {load_timestamp}'\
+          >\
+            Refresh\
+          </button>\
           <input type='hidden' name='{REFRESH}'>\
         </form>\
         "
@@ -107,7 +118,7 @@ pub fn home_page<'data>(
     main_template(
         output,
         |o| {
-            controls(o)?;
+            controls(o, data)?;
 
             feeds(o, data)?;
 

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use fetch::Url;
 use syndicated::Post;
+use timestamp::Timestamp;
 
 pub struct Root(PathBuf);
 
@@ -29,7 +30,10 @@ impl TryFrom<PathBuf> for Root {
 }
 
 type RemoteFeeds = Vec<Url>;
-type Posts = Vec<syndicated::Post>;
+struct Posts {
+    posts: Vec<syndicated::Post>,
+    fetched_at: Timestamp,
+}
 
 enum FetchRemoteFeedsError {
     Io(std::io::Error),
@@ -50,7 +54,11 @@ fn fetch_remote_feeds(
     output: &mut Posts,
     remote_feeds: &RemoteFeeds
 ) -> Result<(), FetchRemoteFeedsError> {
-    output.clear();
+    output.posts.clear();
+
+    // Set the timestamp first, so that if we add an auto refresh later, errors won't
+    // cause a tight retry loop.
+    output.fetched_at = Timestamp::now().map_err(|e| dbg!(e)).unwrap_or_default();
 
     for feed in remote_feeds {
         use std::io::Read;
@@ -63,7 +71,7 @@ fn fetch_remote_feeds(
 
         syndicated::parse_items(
             std::io::Cursor::new(&buffer),
-            output,
+            &mut output.posts,
         );
     }
 
@@ -143,7 +151,10 @@ impl TryFrom<PathBuf> for State {
             );
         }
 
-        let mut posts = Vec::with_capacity(1024);
+        let mut posts = Posts{
+            posts: Vec::with_capacity(1024),
+            fetched_at: timestamp::DEFAULT,
+        };
 
         fetch_remote_feeds(&mut posts, &remote_feeds)?;
 
@@ -240,16 +251,21 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
 
 struct Data<'root, 'posts> {
     root: &'root Root,
-    posts: &'posts [Post],
+    posts: &'posts Posts,
 }
 
 impl <'posts> render::Data<'_> for Data<'_, 'posts> {
     type RootDisplay = String;
     type PostHolder = Post;
     type Link = String;
+    type Timestamp = &'posts Timestamp;
 
     fn posts(&self) -> &'posts [Post] {
-        self.posts
+        &self.posts.posts
+    }
+
+    fn load_timestamp(&self) -> &'posts Timestamp {
+        &self.posts.fetched_at
     }
 
     fn root_display(&self) -> Self::RootDisplay {

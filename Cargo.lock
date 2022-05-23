@@ -418,6 +418,7 @@ dependencies = [
  "fetch",
  "render",
  "syndicated",
+ "timestamp",
 ]
 
 [[package]]
@@ -681,6 +682,7 @@ dependencies = [
  "directories",
  "logic",
  "rouille",
+ "time",
 ]
 
 [[package]]
@@ -853,8 +855,16 @@ version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2702e08a7a860f005826c6815dcac101b19b5eb330c27fe4a5928fec1d20ddd"
 dependencies = [
+ "itoa",
  "libc",
  "num_threads",
+]
+
+[[package]]
+name = "timestamp"
+version = "0.1.0"
+dependencies = [
+ "time",
 ]
 
 [[package]]

@@ -10,4 +10,5 @@ path = "src/logic.rs"
 fetch = { path = "../fetch" }
 render = { path = "../render" }
 syndicated = { path = "../syndicated" }
+timestamp = { path = "../timestamp" }
 
