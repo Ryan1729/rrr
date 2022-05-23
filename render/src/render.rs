@@ -46,6 +46,21 @@ pub struct Post<'post, Link> {
     pub links: &'post [Link]
 }
 
+fn controls(
+    output: &mut impl Output,
+) -> Result {
+    // TODO Use `time` crate to write out when the feeds were refreshed
+    write!(
+        output,
+        "\
+        <form>\
+          <button type='submit'>Refresh</button>\
+          <input type='hidden' name='{REFRESH}'>\
+        </form>\
+        "
+    )
+}
+
 fn feeds<'data>(
     output: &mut impl Output,
     data: &impl Data<'data>
@@ -92,6 +107,8 @@ pub fn home_page<'data>(
     main_template(
         output,
         |o| {
+            controls(o)?;
+
             feeds(o, data)?;
 
             write!(
@@ -124,18 +141,6 @@ where O: Output
     ";
 
     output.write_str(HEADER)?;
-
-    write!(
-        output,
-        "\
-        <form>\
-          <div>\
-            <button type='submit'>Refresh</button>\
-          </div>\
-          <input type='hidden' name='{REFRESH}'>\
-        </form>\
-        "
-    )?;
 
     body(output)?;
 
