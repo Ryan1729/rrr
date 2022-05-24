@@ -10,7 +10,7 @@ pub struct Post {
     pub links: Vec<String>,
 }
 
-impl render::PostHolder<String> for Post {
+impl render::PostHolder<String> for &Post {
     fn get_post(&self) -> render::Post<'_, String> {
         render::Post {
             title: self.title.as_deref(),

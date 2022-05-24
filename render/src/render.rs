@@ -12,6 +12,17 @@ pub type Result<A = ()> = core::result::Result<A, Error>;
 /// A way to incrementally output HTML.
 pub trait Output: core::fmt::Write {}
 
+pub enum SectionKind {
+    Local,
+    Remote,
+}
+
+pub struct Section<Posts, Timestamp> {
+    pub kind: SectionKind,
+    pub posts: Posts,
+    pub timestamp: Timestamp,
+}
+
 /// A way to access a `Post` which may or may not ultimately own it.
 pub trait PostHolder<Link>
 where
@@ -23,21 +34,23 @@ where
 /// A way to access the data we need for rendering.
 pub trait Data<'posts>
 where
+    Self::Link: AsRef<str> + 'posts,
+    Self::PostHolder: PostHolder<Self::Link>,
+    Self::Posts: Iterator<Item = Self::PostHolder>,
+    Self::Sections: Iterator<Item = Section<Self::Posts, Self::Timestamp>>,
     Self::RootDisplay: Display,
     Self::Timestamp: Display,
-    Self::PostHolder: PostHolder<Self::Link>,
-    Self::Link: AsRef<str>,
 {
-    type PostHolder;
     type Link;
+    type PostHolder;
+    type Posts;
+    type Sections;
     type RootDisplay;
     type Timestamp;
 
-    fn posts(&self) -> &[Self::PostHolder];
+    fn post_sections(&self) -> Self::Sections;
 
     fn root_display(&self) -> Self::RootDisplay;
-
-    fn load_timestamp(&self) -> Self::Timestamp;
 }
 
 /// This may be an overly naive representation. But it seems best to go with the
@@ -54,58 +67,85 @@ fn controls<'data>(
     output: &mut impl Output,
     data: &impl Data<'data>
 ) -> Result {
-    let load_timestamp = data.load_timestamp();
+    use SectionKind::*;
+    for section in data.post_sections() {
+        let (label, refresh_key) = match section.kind {
+            Local => ("Refresh Local Posts", REFRESH_LOCAL),
+            Remote => ("Refresh Remote Posts", REFRESH_REMOTE),
+        };
+        let timestamp = section.timestamp;
 
-    write!(
-        output,
-        "\
-        <form>\
-          <button \
-            type='submit' \
-            title='Fresh as of {load_timestamp}'\
-          >\
-            Refresh\
-          </button>\
-          <input type='hidden' name='{REFRESH}'>\
-        </form>\
-        "
-    )
+        write!(
+            output,
+            "\
+            <form>\
+              <button \
+                type='submit' \
+                title='Fresh as of {timestamp}'\
+              >\
+                {label}\
+              </button>\
+              <input type='hidden' name='{refresh_key}'>\
+            </form>\
+            "
+        )?;
+    }
+
+    Ok(())
 }
 
 fn feeds<'data>(
     output: &mut impl Output,
     data: &impl Data<'data>
 ) -> Result {
-    for (i, post) in data.posts().iter().enumerate() {
-        let post = post.get_post();
-        write!(output, "<p>#{i}")?;
+    use SectionKind::*;
 
-        let mut links = post.links;
+    for section in data.post_sections() {
+        let (name, letter) = match section.kind {
+            Local => ("local posts", 'L'),
+            Remote => ("remote posts", 'R'),
+        };
 
-        if let Some(title) = post.title {
-            if let Some(link) = links.get(0) {
-                let link = link.as_ref();
-                write!(output, "<h2><a href=\"{link}\">{title}</a></h2>")?;
-                links = &links[1..];
-            } else {
-                write!(output, "<h2>{title}</h2>")?;
+        write!(
+            output, 
+            "<details>\
+                <summary>{name}</summary>\
+            "
+        )?;
+
+        for (i, post) in section.posts.enumerate() {
+            let post = post.get_post();
+            write!(output, "<p>#{letter}{i}")?;
+    
+            let mut links = post.links;
+    
+            if let Some(title) = post.title {
+                if let Some(link) = links.get(0) {
+                    let link = link.as_ref();
+                    write!(output, "<h2><a href=\"{link}\">{title}</a></h2>")?;
+                    links = &links[1..];
+                } else {
+                    write!(output, "<h2>{title}</h2>")?;
+                }
             }
+    
+            if let Some(summary) = post.summary {
+                write!(output, "<h3>{summary}</h3>")?;
+            }
+    
+            if let Some(content) = post.content {
+                write!(output, "<p>{content}</p>")?;
+            }
+    
+            for (i, link) in links.iter().enumerate() {
+                let link = link.as_ref();
+                write!(output, "<a href=\"{link}\">{}</a>", i + 1)?;
+            }
+    
+            write!(output, "</p>")?;
         }
 
-        if let Some(summary) = post.summary {
-            write!(output, "<h3>{summary}</h3>")?;
-        }
-
-        if let Some(content) = post.content {
-            write!(output, "<p>{content}</p>")?;
-        }
-
-        for (i, link) in links.iter().enumerate() {
-            let link = link.as_ref();
-            write!(output, "<a href=\"{link}\">{}</a>", i + 1)?;
-        }
-
-        write!(output, "</p>")?;
+        write!(output, "</details>")?;
     }
 
     Ok(())
@@ -132,7 +172,8 @@ pub fn home_page<'data>(
 }
 
 pub mod keys {
-    pub const REFRESH: &str = "refresh";
+    pub const REFRESH_LOCAL: &str = "refresh-local";
+    pub const REFRESH_REMOTE: &str = "refresh-remote";
 }
 use keys::*;
 

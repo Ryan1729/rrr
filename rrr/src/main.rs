@@ -47,17 +47,13 @@ fn inner_main() -> Res<()> {
             .data_dir()
             .to_owned()
     };
-    std::fs::create_dir_all(&data_dir)?;
-    if !data_dir.is_dir() {
-        return Err(format!("Not a directory: {}", data_dir.display()).into())
-    }
-    let data_dir = data_dir.canonicalize()?;
-
-    let displayed_dir = data_dir.display().to_string();
 
     let state = logic::State::try_from(data_dir)?;    
 
-    println!("Data Directory: {displayed_dir}");
+    {
+        let displayed_dir = state.root_display();
+        println!("Data Directory: {displayed_dir}");
+    }
 
     start(addr, state)
 }

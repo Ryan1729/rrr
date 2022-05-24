@@ -1,7 +1,7 @@
 use time::{OffsetDateTime as ODT, UtcOffset as UO};
 
 /// A local-time timestamp.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct Timestamp(ODT);
 

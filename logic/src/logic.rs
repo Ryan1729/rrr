@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use fetch::Url;
 use syndicated::Post;
 use timestamp::{Timestamp, UtcOffset};
@@ -79,11 +79,34 @@ fn fetch_remote_feeds(
     Ok(())
 }
 
+const LOCAL_FEEDS: &str = "local-feeds";
+
+/// `output` will be cleared before being filled with the current posts.
+fn load_local_posts(
+    output: &mut Posts,
+    root: &Root,
+    utc_offset: UtcOffset,
+) -> std::io::Result<()> {
+    output.posts.clear();
+
+    let local_feeds_dir = root.path_to(LOCAL_FEEDS);
+    let local_feeds_dir = ensure_directory(local_feeds_dir)?;
+
+    todo!("load_local_posts")
+}
+
 pub struct State {
     root: Root,
     remote_feeds: RemoteFeeds,
-    posts: Posts,
+    remote_posts: Posts,
+    local_posts: Posts,
     utc_offset: UtcOffset,
+}
+
+impl State {
+    pub fn root_display(&self) -> impl core::fmt::Display + '_ {
+        self.root.display()
+    }
 }
 
 #[derive(Debug)]
@@ -123,6 +146,9 @@ impl TryFrom<PathBuf> for State {
     type Error = StateCreationError;
 
     fn try_from(root: PathBuf) -> Result<Self, Self::Error> {
+        let root = ensure_directory(root)
+            .map_err(Self::Error::Io)?;
+
         let root = Root::try_from(root)
             .map_err(|MustBeDirError()| Self::Error::RootMustBeDir)?;
 
@@ -150,19 +176,28 @@ impl TryFrom<PathBuf> for State {
             );
         }
 
-        let mut posts = Posts{
+        let utc_offset = UtcOffset::current_local_or_utc();
+
+        let mut local_posts = Posts{
             posts: Vec::with_capacity(1024),
             fetched_at: Timestamp::DEFAULT,
         };
 
-        let utc_offset = UtcOffset::current_local_or_utc();
+        load_local_posts(&mut local_posts, &root, utc_offset)
+            .map_err(Self::Error::Io)?;
 
-        fetch_remote_feeds(&mut posts, &remote_feeds, utc_offset)?;
+        let mut remote_posts = Posts{
+            posts: Vec::with_capacity(1024),
+            fetched_at: Timestamp::DEFAULT,
+        };
+
+        fetch_remote_feeds(&mut remote_posts, &remote_feeds, utc_offset)?;
 
         Ok(Self {
             root,
             remote_feeds,
-            posts,
+            remote_posts,
+            local_posts,
             utc_offset,
         })
     }
@@ -186,12 +221,14 @@ impl core::fmt::Write for Output {
 
 impl render::Output for Output {}
 
-#[derive(Debug)]
-pub struct Refresh;
+type Flags = u8;
+
+const REFRESH_LOCAL: Flags  = 0b0000_0001;
+const REFRESH_REMOTE: Flags = 0b0000_0010;
 
 #[derive(Debug)]
 pub enum Task {
-    ShowHomePage(Option<Refresh>),
+    ShowHomePage(Flags),
 }
 
 pub enum Method {
@@ -231,15 +268,19 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
     
     use render::keys;
 
-    let mut extra = None;
-    if let Some(_) = spec.query_param(keys::REFRESH) {
-        extra = Some(Refresh);
+    let mut flags = 0;
+    if let Some(_) = spec.query_param(keys::REFRESH_LOCAL) {
+        flags |= REFRESH_LOCAL;
+    }
+
+    if let Some(_) = spec.query_param(keys::REFRESH_REMOTE) {
+        flags |= REFRESH_REMOTE;
     }
 
     let url = spec.url_suffix();
     match (spec.method(), url.as_ref()) {
         (Method::Get, "/") => {
-            Ok(ShowHomePage(extra))
+            Ok(ShowHomePage(flags))
         },
         (method, _) => {
             Err(TaskError(
@@ -248,30 +289,6 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
                 )
             ))
         },
-    }
-}
-
-struct Data<'root, 'posts> {
-    root: &'root Root,
-    posts: &'posts Posts,
-}
-
-impl <'posts> render::Data<'_> for Data<'_, 'posts> {
-    type RootDisplay = String;
-    type PostHolder = Post;
-    type Link = String;
-    type Timestamp = &'posts Timestamp;
-
-    fn posts(&self) -> &'posts [Post] {
-        &self.posts.posts
-    }
-
-    fn load_timestamp(&self) -> &'posts Timestamp {
-        &self.posts.fetched_at
-    }
-
-    fn root_display(&self) -> Self::RootDisplay {
-        format!("{}", self.root.display())
     }
 }
 
@@ -309,13 +326,22 @@ impl State {
         use Task::*;
 
         match task {
-            ShowHomePage(None) => {}
-            ShowHomePage(Some(Refresh)) => {
-                fetch_remote_feeds(
-                    &mut self.posts,
-                    &self.remote_feeds,
-                    self.utc_offset,
-                )?;
+            ShowHomePage(flags) => {
+                if flags & REFRESH_LOCAL != 0 {
+                    load_local_posts(
+                        &mut self.local_posts,
+                        &self.root,
+                        self.utc_offset,
+                    ).map_err(PerformError::Io)?;
+                }
+
+                if flags & REFRESH_REMOTE != 0 {
+                    fetch_remote_feeds(
+                        &mut self.remote_posts,
+                        &self.remote_feeds,
+                        self.utc_offset,
+                    )?;
+                }
             }
         }
 
@@ -324,9 +350,63 @@ impl State {
 
         render::home_page(
             &mut output,
-            &Data { root: &self.root, posts: &self.posts }
+            &Data { 
+                root: &self.root,
+                local_posts: &self.local_posts,
+                remote_posts: &self.remote_posts,
+            }
         ).map_err(PerformError::Render)?;
 
         Ok(output)
+    }
+}
+
+fn ensure_directory(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let path = path.as_ref();
+    std::fs::create_dir_all(path)?;
+    if !path.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Not a directory: {}", path.display())
+        ))
+    }
+    path.canonicalize()
+}
+
+struct Data<'root, 'posts> {
+    root: &'root Root,
+    local_posts: &'posts Posts,
+    remote_posts: &'posts Posts,
+}
+
+impl <'posts> render::Data<'_> for Data<'_, 'posts> {
+    type Link = String;
+    type PostHolder = &'posts Post;
+    type Posts = std::slice::Iter<'posts, Post>;
+    type Sections = std::array::IntoIter<
+        render::Section<Self::Posts, Self::Timestamp>,
+        2
+    >;
+    type RootDisplay = String;
+    type Timestamp = Timestamp;
+
+    fn post_sections(&self) -> Self::Sections {
+        use render::SectionKind::*;
+        [
+            render::Section {
+                kind: Local,
+                posts: self.local_posts.posts.iter(),
+                timestamp: self.local_posts.fetched_at,
+            },
+            render::Section {
+                kind: Remote,
+                posts: self.remote_posts.posts.iter(),
+                timestamp: self.remote_posts.fetched_at,
+            },
+        ].into_iter()
+    }
+
+    fn root_display(&self) -> Self::RootDisplay {
+        format!("{}", self.root.display())
     }
 }
