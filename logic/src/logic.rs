@@ -89,10 +89,26 @@ fn load_local_posts(
 ) -> std::io::Result<()> {
     output.posts.clear();
 
+    // Set the timestamp first, so that if we add an auto refresh later, errors won't
+    // cause a tight retry loop.
+    output.fetched_at = Timestamp::now_at_offset(utc_offset);
+
     let local_feeds_dir = root.path_to(LOCAL_FEEDS);
     let local_feeds_dir = ensure_directory(local_feeds_dir)?;
 
-    todo!("load_local_posts")
+    for entry in std::fs::read_dir(local_feeds_dir)? {
+        let entry = entry?;
+
+        // TODO is it worth switching to reusing a single buffer across iterations?
+        let buffer = std::fs::read_to_string(entry.path())?;
+
+        syndicated::parse_items(
+            std::io::Cursor::new(&buffer),
+            &mut output.posts,
+        );
+    }
+
+    Ok(())
 }
 
 pub struct State {
