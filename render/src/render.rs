@@ -31,26 +31,31 @@ where
     fn get_post(&self) -> Post<'_, Link>;
 }
 
+pub trait RootDisplay
+where 
+    Self::RootDisplay: Display,
+{
+    type RootDisplay;
+
+    fn root_display(&self) -> Self::RootDisplay;
+}
+
 /// A way to access the data we need for rendering.
-pub trait Data<'posts>
+pub trait Data<'posts>: RootDisplay
 where
     Self::Link: AsRef<str> + 'posts,
     Self::PostHolder: PostHolder<Self::Link>,
     Self::Posts: Iterator<Item = Self::PostHolder>,
     Self::Sections: Iterator<Item = Section<Self::Posts, Self::Timestamp>>,
-    Self::RootDisplay: Display,
     Self::Timestamp: Display,
 {
     type Link;
     type PostHolder;
     type Posts;
     type Sections;
-    type RootDisplay;
     type Timestamp;
 
     fn post_sections(&self) -> Self::Sections;
-
-    fn root_display(&self) -> Self::RootDisplay;
 }
 
 /// This may be an overly naive representation. But it seems best to go with the
@@ -91,7 +96,7 @@ fn controls<'data>(
         )?;
     }
 
-    Ok(())
+    write!(output, "<a href='{LOCAL_ADD}'>Add local entry</a>")
 }
 
 fn feeds<'data>(
@@ -171,9 +176,39 @@ pub fn home_page<'data>(
     )
 }
 
+pub fn local_add_form(
+    output: &mut impl Output,
+    local_add_targets: impl Iterator<Item = impl Display>,
+    root_display: &impl RootDisplay,
+) -> Result {
+    main_template(
+        output,
+        |o| {
+            write!(o, "<select>")?;
+
+            for target in local_add_targets {
+                write!(
+                    o,
+                    "<option value='{target}'>{target}</option>"
+                )?;
+            }
+
+            write!(o, "</select>")?;
+
+            write!(
+                o,
+                "<footer>{}</footer>",
+                root_display.root_display()
+            )
+        }
+    )
+}
+
 pub mod keys {
     pub const REFRESH_LOCAL: &str = "refresh-local";
     pub const REFRESH_REMOTE: &str = "refresh-remote";
+
+    pub const LOCAL_ADD: &str = "/local-add";
 }
 use keys::*;
 

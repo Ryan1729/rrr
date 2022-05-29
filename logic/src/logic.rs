@@ -82,8 +82,10 @@ fn fetch_remote_feeds(
 const LOCAL_FEEDS: &str = "local-feeds";
 
 /// `output` will be cleared before being filled with the current posts.
+/// `paths` will be cleared before being filled with the current paths.
 fn load_local_posts(
     output: &mut Posts,
+    paths: &mut Vec<PathBuf>,
     root: &Root,
     utc_offset: UtcOffset,
 ) -> std::io::Result<()> {
@@ -93,14 +95,11 @@ fn load_local_posts(
     // cause a tight retry loop.
     output.fetched_at = Timestamp::now_at_offset(utc_offset);
 
-    let local_feeds_dir = root.path_to(LOCAL_FEEDS);
-    let local_feeds_dir = ensure_directory(local_feeds_dir)?;
+    load_local_feed_paths(paths, root)?;
 
-    for entry in std::fs::read_dir(local_feeds_dir)? {
-        let entry = entry?;
-
+    for path in paths {
         // TODO is it worth switching to reusing a single buffer across iterations?
-        let buffer = std::fs::read_to_string(entry.path())?;
+        let buffer = std::fs::read_to_string(path)?;
 
         syndicated::parse_items(
             std::io::Cursor::new(&buffer),
@@ -111,11 +110,29 @@ fn load_local_posts(
     Ok(())
 }
 
+/// `output` will be cleared before being filled with the current paths.
+fn load_local_feed_paths(
+    output: &mut Vec<PathBuf>,
+    root: &Root,
+) -> std::io::Result<()> {
+    output.clear();
+
+    let local_feeds_dir = root.path_to(LOCAL_FEEDS);
+    let local_feeds_dir = ensure_directory(local_feeds_dir)?;
+
+    for entry in std::fs::read_dir(local_feeds_dir)? {
+        output.push(entry?.path());
+    }
+
+    Ok(())
+}
+
 pub struct State {
     root: Root,
     remote_feeds: RemoteFeeds,
     remote_posts: Posts,
     local_posts: Posts,
+    local_feed_paths: Vec<PathBuf>,
     utc_offset: UtcOffset,
 }
 
@@ -194,13 +211,19 @@ impl TryFrom<PathBuf> for State {
 
         let utc_offset = UtcOffset::current_local_or_utc();
 
+        let mut local_feed_paths = Vec::with_capacity(8);
+
         let mut local_posts = Posts{
             posts: Vec::with_capacity(1024),
             fetched_at: Timestamp::DEFAULT,
         };
 
-        load_local_posts(&mut local_posts, &root, utc_offset)
-            .map_err(Self::Error::Io)?;
+        load_local_posts(
+            &mut local_posts,
+            &mut local_feed_paths,
+            &root,
+            utc_offset
+        ).map_err(Self::Error::Io)?;
 
         let mut remote_posts = Posts{
             posts: Vec::with_capacity(1024),
@@ -214,6 +237,7 @@ impl TryFrom<PathBuf> for State {
             remote_feeds,
             remote_posts,
             local_posts,
+            local_feed_paths,
             utc_offset,
         })
     }
@@ -245,6 +269,7 @@ const REFRESH_REMOTE: Flags = 0b0000_0010;
 #[derive(Debug)]
 pub enum Task {
     ShowHomePage(Flags),
+    ShowLocalAddForm,
 }
 
 pub enum Method {
@@ -284,19 +309,22 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
     
     use render::keys;
 
-    let mut flags = 0;
-    if let Some(_) = spec.query_param(keys::REFRESH_LOCAL) {
-        flags |= REFRESH_LOCAL;
-    }
-
-    if let Some(_) = spec.query_param(keys::REFRESH_REMOTE) {
-        flags |= REFRESH_REMOTE;
-    }
-
     let url = spec.url_suffix();
     match (spec.method(), url.as_ref()) {
         (Method::Get, "/") => {
+            let mut flags = 0;
+            if let Some(_) = spec.query_param(keys::REFRESH_LOCAL) {
+                flags |= REFRESH_LOCAL;
+            }
+        
+            if let Some(_) = spec.query_param(keys::REFRESH_REMOTE) {
+                flags |= REFRESH_REMOTE;
+            }
+
             Ok(ShowHomePage(flags))
+        },
+        (Method::Get, keys::LOCAL_ADD) => {
+            Ok(ShowLocalAddForm)
         },
         (method, _) => {
             Err(TaskError(
@@ -341,11 +369,15 @@ impl State {
     pub fn perform(&mut self, task: Task) -> Result<Output, PerformError> {
         use Task::*;
 
+        // 64k ought to be enough for anybody!
+        let mut output = Output::Html(String::with_capacity(65536));
+
         match task {
             ShowHomePage(flags) => {
                 if flags & REFRESH_LOCAL != 0 {
                     load_local_posts(
                         &mut self.local_posts,
+                        &mut self.local_feed_paths,
                         &self.root,
                         self.utc_offset,
                     ).map_err(PerformError::Io)?;
@@ -358,20 +390,33 @@ impl State {
                         self.utc_offset,
                     )?;
                 }
+
+                render::home_page(
+                    &mut output,
+                    &Data { 
+                        root: &self.root,
+                        local_posts: &self.local_posts,
+                        remote_posts: &self.remote_posts,
+                    }
+                ).map_err(PerformError::Render)?;
+            },
+            ShowLocalAddForm => {
+                load_local_feed_paths(&mut self.local_feed_paths, &self.root)
+                    .map_err(PerformError::Io)?;
+
+                render::local_add_form(
+                    &mut output,
+                    self.local_feed_paths
+                        .iter()
+                        .map(|p| p.display().to_string()),
+                    &Data { 
+                        root: &self.root,
+                        local_posts: &self.local_posts,
+                        remote_posts: &self.remote_posts,
+                    }
+                ).map_err(PerformError::Render)?;
             }
         }
-
-        // 64k ought to be enough for anybody!
-        let mut output = Output::Html(String::with_capacity(65536));
-
-        render::home_page(
-            &mut output,
-            &Data { 
-                root: &self.root,
-                local_posts: &self.local_posts,
-                remote_posts: &self.remote_posts,
-            }
-        ).map_err(PerformError::Render)?;
 
         Ok(output)
     }
@@ -395,6 +440,14 @@ struct Data<'root, 'posts> {
     remote_posts: &'posts Posts,
 }
 
+impl render::RootDisplay for Data<'_, '_> {
+    type RootDisplay = String;
+
+    fn root_display(&self) -> Self::RootDisplay {
+        format!("{}", self.root.display())
+    }
+}
+
 impl <'posts> render::Data<'_> for Data<'_, 'posts> {
     type Link = String;
     type PostHolder = &'posts Post;
@@ -403,7 +456,6 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
         render::Section<Self::Posts, Self::Timestamp>,
         2
     >;
-    type RootDisplay = String;
     type Timestamp = Timestamp;
 
     fn post_sections(&self) -> Self::Sections {
@@ -420,9 +472,5 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
                 timestamp: self.remote_posts.fetched_at,
             },
         ].into_iter()
-    }
-
-    fn root_display(&self) -> Self::RootDisplay {
-        format!("{}", self.root.display())
     }
 }
