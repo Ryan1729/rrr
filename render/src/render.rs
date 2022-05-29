@@ -32,7 +32,7 @@ where
 }
 
 pub trait RootDisplay
-where 
+where
     Self::RootDisplay: Display,
 {
     type RootDisplay;
@@ -112,7 +112,7 @@ fn feeds<'data>(
         };
 
         write!(
-            output, 
+            output,
             "<details>\
                 <summary>{name}</summary>\
             "
@@ -121,9 +121,9 @@ fn feeds<'data>(
         for (i, post) in section.posts.enumerate() {
             let post = post.get_post();
             write!(output, "<p>#{letter}{i}")?;
-    
+
             let mut links = post.links;
-    
+
             if let Some(title) = post.title {
                 if let Some(link) = links.get(0) {
                     let link = link.as_ref();
@@ -133,20 +133,20 @@ fn feeds<'data>(
                     write!(output, "<h2>{title}</h2>")?;
                 }
             }
-    
+
             if let Some(summary) = post.summary {
                 write!(output, "<h3>{summary}</h3>")?;
             }
-    
+
             if let Some(content) = post.content {
                 write!(output, "<p>{content}</p>")?;
             }
-    
+
             for (i, link) in links.iter().enumerate() {
                 let link = link.as_ref();
                 write!(output, "<a href=\"{link}\">{}</a>", i + 1)?;
             }
-    
+
             write!(output, "</p>")?;
         }
 
@@ -176,30 +176,87 @@ pub fn home_page<'data>(
     )
 }
 
-pub fn local_add_form(
+pub trait Path
+where
+    Self::Display: Display
+{
+    type Display;
+
+    fn display() -> Self::Display;
+}
+
+pub trait Target: PartialEq + Eq
+where
+    Self::Label: Display,
+    Self::Value: Display,
+{
+    type Label;
+    type Value;
+
+    fn label(&self) -> Self::Label;
+    fn value(&self) -> Self::Value;
+}
+
+pub struct LocalAddForm<Target> {
+    pub target: Target,
+}
+
+pub fn local_add_form<Trget: Target>(
     output: &mut impl Output,
-    local_add_targets: impl Iterator<Item = impl Display>,
+    local_add_targets: impl Iterator<Item = Trget>,
     root_display: &impl RootDisplay,
+    previous: Option<LocalAddForm<Trget>>,
 ) -> Result {
     main_template(
         output,
         |o| {
-            write!(o, "<select>")?;
+            write!(
+                o,
+                "<form>\
+                    <select>"
+            )?;
 
             for target in local_add_targets {
+                let selected = if
+                    Some(&target)
+                    == previous.as_ref().map(|p| &p.target) {
+                    "selected"
+                } else {
+                    ""
+                };
+
                 write!(
                     o,
-                    "<option value='{target}'>{target}</option>"
+                    "<option value='{value}' {selected}>{label}</option>",
+                    value = target.value(),
+                    label = target.label(),
                 )?;
             }
 
-            write!(o, "</select>")?;
+            write!(
+                o,
+                "\
+                    </select>\
+                    <input type='submit' formmethod='post'>\
+                </form>"
+            )?;
 
             write!(
                 o,
                 "<footer>{}</footer>",
                 root_display.root_display()
             )
+        }
+    )
+}
+
+pub fn local_add_form_success(
+    output: &mut impl Output,
+) -> Result {
+    main_template(
+        output,
+        |o| {
+            write!(o, "Successfully added local post")
         }
     )
 }

@@ -1,8 +1,19 @@
 use std::path::{Path, PathBuf};
 use fetch::Url;
-use syndicated::Post;
 use timestamp::{Timestamp, UtcOffset};
 
+pub use syndicated::Post;
+
+macro_rules! other {
+    ($($tokens: tt)+) => {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!($($tokens)*)
+        )
+    }
+}
+
+#[derive(PartialEq, Eq)]
 pub struct Root(PathBuf);
 
 impl Root {
@@ -10,7 +21,7 @@ impl Root {
         self.0.join(file_name)
     }
 
-    fn display(&self) -> impl core::fmt::Display + '_ {
+    fn display(&self) -> std::path::Display<'_> {
         self.0.display()
     }
 }
@@ -85,8 +96,8 @@ const LOCAL_FEEDS: &str = "local-feeds";
 /// `paths` will be cleared before being filled with the current paths.
 fn load_local_posts(
     output: &mut Posts,
-    paths: &mut Vec<PathBuf>,
-    root: &Root,
+    paths: &mut Vec<LocalFeedPath>,
+    local_feeds_dir: &LocalFeedsDir,
     utc_offset: UtcOffset,
 ) -> std::io::Result<()> {
     output.posts.clear();
@@ -95,7 +106,7 @@ fn load_local_posts(
     // cause a tight retry loop.
     output.fetched_at = Timestamp::now_at_offset(utc_offset);
 
-    load_local_feed_paths(paths, root)?;
+    load_local_feed_paths(paths, local_feeds_dir)?;
 
     for path in paths {
         // TODO is it worth switching to reusing a single buffer across iterations?
@@ -112,19 +123,62 @@ fn load_local_posts(
 
 /// `output` will be cleared before being filled with the current paths.
 fn load_local_feed_paths(
-    output: &mut Vec<PathBuf>,
-    root: &Root,
+    output: &mut Vec<LocalFeedPath>,
+    local_feeds_dir: &LocalFeedsDir,
 ) -> std::io::Result<()> {
     output.clear();
 
-    let local_feeds_dir = root.path_to(LOCAL_FEEDS);
-    let local_feeds_dir = ensure_directory(local_feeds_dir)?;
-
     for entry in std::fs::read_dir(local_feeds_dir)? {
-        output.push(entry?.path());
+        output.push(
+            LocalFeedPath::new(entry?.path(), local_feeds_dir)
+                .map_err(|BadPrefixError()|
+                    other!("Got file that was not in the local_feeds_dir")
+                )?
+        );
     }
 
     Ok(())
+}
+
+#[repr(transparent)]
+struct LocalFeedsDir(PathBuf);
+
+impl AsRef<Path> for LocalFeedsDir {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
+    }
+}
+
+impl LocalFeedsDir {
+    fn new(root: &Root) -> std::io::Result<Self> {
+        ensure_directory(root.path_to(LOCAL_FEEDS))
+            .map(Self)
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct LocalFeedPath(PathBuf);
+
+impl AsRef<Path> for LocalFeedPath {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
+    }
+}
+
+struct BadPrefixError();
+
+impl LocalFeedPath {
+    fn new(
+        path: PathBuf,
+        local_feeds_dir: &LocalFeedsDir
+    ) -> Result<Self, BadPrefixError> {
+        if path.starts_with(local_feeds_dir) {
+            Ok(Self(path))
+        } else {
+            Err(BadPrefixError())
+        }
+    }
 }
 
 pub struct State {
@@ -132,7 +186,8 @@ pub struct State {
     remote_feeds: RemoteFeeds,
     remote_posts: Posts,
     local_posts: Posts,
-    local_feed_paths: Vec<PathBuf>,
+    local_feed_paths: Vec<LocalFeedPath>,
+    local_feeds_dir: LocalFeedsDir,
     utc_offset: UtcOffset,
 }
 
@@ -173,14 +228,20 @@ impl From<FetchRemoteFeedsError> for StateCreationError {
     }
 }
 
+impl From<std::io::Error> for StateCreationError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+
 const REMOTE_FEEDS: &str = "remote-feeds";
 
 impl TryFrom<PathBuf> for State {
     type Error = StateCreationError;
 
     fn try_from(root: PathBuf) -> Result<Self, Self::Error> {
-        let root = ensure_directory(root)
-            .map_err(Self::Error::Io)?;
+        let root = ensure_directory(root)?;
 
         let root = Root::try_from(root)
             .map_err(|MustBeDirError()| Self::Error::RootMustBeDir)?;
@@ -189,15 +250,14 @@ impl TryFrom<PathBuf> for State {
             .read(true)
             .write(true)
             .create(true)
-            .open(root.path_to(REMOTE_FEEDS))
-            .map_err(Self::Error::Io)?;
+            .open(root.path_to(REMOTE_FEEDS))?;
 
         let mut remote_feeds_string = String::with_capacity(1024);
 
         std::io::Read::read_to_string(
             &mut remote_feeds_file,
             &mut remote_feeds_string
-        ).map_err(Self::Error::Io)?;
+        )?;
 
         // TODO store count in file on disk?
         let mut remote_feeds = Vec::with_capacity(16);
@@ -218,12 +278,16 @@ impl TryFrom<PathBuf> for State {
             fetched_at: Timestamp::DEFAULT,
         };
 
+        let local_feeds_dir = LocalFeedsDir::new(
+            &root,
+        )?;
+
         load_local_posts(
             &mut local_posts,
             &mut local_feed_paths,
-            &root,
+            &local_feeds_dir,
             utc_offset
-        ).map_err(Self::Error::Io)?;
+        )?;
 
         let mut remote_posts = Posts{
             posts: Vec::with_capacity(1024),
@@ -238,6 +302,7 @@ impl TryFrom<PathBuf> for State {
             remote_posts,
             local_posts,
             local_feed_paths,
+            local_feeds_dir,
             utc_offset,
         })
     }
@@ -267,14 +332,21 @@ const REFRESH_LOCAL: Flags  = 0b0000_0001;
 const REFRESH_REMOTE: Flags = 0b0000_0010;
 
 #[derive(Debug)]
+pub struct LocalAddForm {
+    pub path: PathBuf,
+    pub post: Post,
+}
+
+#[derive(Debug)]
 pub enum Task {
     ShowHomePage(Flags),
     ShowLocalAddForm,
+    SubmitLocalAddForm(LocalAddForm)
 }
 
 pub enum Method {
     Get,
-//    Post,
+    Post,
     Other,
 }
 
@@ -282,15 +354,19 @@ impl core::fmt::Display for Method {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Get => write!(f, "GET"),
+            Self::Post => write!(f, "POST"),
             Self::Other => write!(f, "???"),
         }
     }
 }
 
+pub struct LocalAddFormError;
+
 pub trait TaskSpec {
     fn method(&self) -> Method;
     fn url_suffix(&self) -> String;
     fn query_param(&self, key: &str) -> Option<String>;
+    fn local_add_form(&self) -> Result<LocalAddForm, LocalAddFormError>;
 }
 
 #[derive(Debug)]
@@ -304,9 +380,15 @@ impl core::fmt::Display for TaskError {
 
 impl std::error::Error for TaskError {}
 
+impl From<LocalAddFormError> for TaskError {
+    fn from(_e: LocalAddFormError) -> TaskError {
+        todo!("From<LocalAddFormError> for TaskError")
+    }
+}
+
 pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
     use Task::*;
-    
+
     use render::keys;
 
     let url = spec.url_suffix();
@@ -316,7 +398,7 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
             if let Some(_) = spec.query_param(keys::REFRESH_LOCAL) {
                 flags |= REFRESH_LOCAL;
             }
-        
+
             if let Some(_) = spec.query_param(keys::REFRESH_REMOTE) {
                 flags |= REFRESH_REMOTE;
             }
@@ -325,6 +407,9 @@ pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
         },
         (Method::Get, keys::LOCAL_ADD) => {
             Ok(ShowLocalAddForm)
+        },
+        (Method::Post, keys::LOCAL_ADD) => {
+            spec.local_add_form().map(SubmitLocalAddForm).map_err(From::from)
         },
         (method, _) => {
             Err(TaskError(
@@ -365,6 +450,18 @@ impl From<FetchRemoteFeedsError> for PerformError {
     }
 }
 
+impl From<std::io::Error> for PerformError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<render::Error> for PerformError {
+    fn from(e: render::Error) -> Self {
+        Self::Render(e)
+    }
+}
+
 impl State {
     pub fn perform(&mut self, task: Task) -> Result<Output, PerformError> {
         use Task::*;
@@ -378,9 +475,9 @@ impl State {
                     load_local_posts(
                         &mut self.local_posts,
                         &mut self.local_feed_paths,
-                        &self.root,
+                        &self.local_feeds_dir,
                         self.utc_offset,
-                    ).map_err(PerformError::Io)?;
+                    )?;
                 }
 
                 if flags & REFRESH_REMOTE != 0 {
@@ -393,43 +490,79 @@ impl State {
 
                 render::home_page(
                     &mut output,
-                    &Data { 
+                    &Data {
                         root: &self.root,
                         local_posts: &self.local_posts,
                         remote_posts: &self.remote_posts,
-                    }
-                ).map_err(PerformError::Render)?;
+                    },
+                )?;
             },
             ShowLocalAddForm => {
-                load_local_feed_paths(&mut self.local_feed_paths, &self.root)
-                    .map_err(PerformError::Io)?;
+                load_local_feed_paths(
+                    &mut self.local_feed_paths,
+                    &self.local_feeds_dir
+                )?;
 
                 render::local_add_form(
                     &mut output,
                     self.local_feed_paths
                         .iter()
-                        .map(|p| p.display().to_string()),
-                    &Data { 
+                        .map(|path| Target {
+                            path: path.as_ref(),
+                            root: &self.root,
+                        }),
+                    &Data {
                         root: &self.root,
                         local_posts: &self.local_posts,
                         remote_posts: &self.remote_posts,
+                    },
+                    None,
+                )?;
+            }
+            SubmitLocalAddForm(form) => {
+                match add_local_feed(form) {
+                    Ok(()) => {
+                        render::local_add_form_success(&mut output)?
                     }
-                ).map_err(PerformError::Render)?;
+                    Err(form) => {
+                        render::local_add_form(
+                            &mut output,
+                            self.local_feed_paths
+                                .iter()
+                                .map(|path| Target {
+                                    path: path.as_ref(),
+                                    root: &self.root,
+                                }),
+                            &Data {
+                                root: &self.root,
+                                local_posts: &self.local_posts,
+                                remote_posts: &self.remote_posts,
+                            },
+                            Some(self.previous_form(form))
+                        )?;
+                    }
+                }
             }
         }
 
         Ok(output)
     }
+
+    fn previous_form(&self, _form: LocalAddForm) -> render::LocalAddForm<Target<'_, '_>> {
+        todo!("previous_form")
+    }
+}
+
+fn add_local_feed(_form: LocalAddForm) -> Result<(), LocalAddForm> {
+    // Will probably need to return an error message as well.
+    todo!("add_local_feed")
 }
 
 fn ensure_directory(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let path = path.as_ref();
     std::fs::create_dir_all(path)?;
     if !path.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Not a directory: {}", path.display())
-        ))
+        return Err(other!("Not a directory: {}", path.display()))
     }
     path.canonicalize()
 }
@@ -440,11 +573,11 @@ struct Data<'root, 'posts> {
     remote_posts: &'posts Posts,
 }
 
-impl render::RootDisplay for Data<'_, '_> {
-    type RootDisplay = String;
+impl <'root> render::RootDisplay for Data<'root, '_> {
+    type RootDisplay = std::path::Display<'root>;
 
     fn root_display(&self) -> Self::RootDisplay {
-        format!("{}", self.root.display())
+        self.root.display()
     }
 }
 
@@ -472,5 +605,27 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
                 timestamp: self.remote_posts.fetched_at,
             },
         ].into_iter()
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct Target<'path, 'root> {
+    path: &'path Path,
+    root: &'root Root,
+}
+
+impl <'path> render::Target for Target<'path, '_> {
+    type Label = std::path::Display<'path>;
+    type Value = std::path::Display<'path>;
+
+    fn label(&self) -> Self::Label {
+        self.path
+            .strip_prefix(&self.root.0)
+            .unwrap_or(&self.path)
+            .display()
+    }
+
+    fn value(&self) -> Self::Value {
+        self.path.display()
     }
 }

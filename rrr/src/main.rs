@@ -80,6 +80,11 @@ impl <'request> logic::TaskSpec for TaskSpec<'request> {
     fn query_param(&self, key: &str) -> Option<String> {
         self.0.get_param(key)
     }
+
+    fn local_add_form(&self)
+    -> Result<logic::LocalAddForm, logic::LocalAddFormError> {
+        todo!("local_add_form")
+    }
 }
 
 fn start(addr: SocketAddr, state: logic::State) -> ! {
