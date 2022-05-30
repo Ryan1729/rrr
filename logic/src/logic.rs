@@ -360,13 +360,15 @@ impl core::fmt::Display for Method {
     }
 }
 
-pub struct LocalAddFormError;
-
-pub trait TaskSpec {
+pub trait TaskSpec
+where
+    Self::LocalAddFormError: std::error::Error,
+{
     fn method(&self) -> Method;
     fn url_suffix(&self) -> String;
     fn query_param(&self, key: &str) -> Option<String>;
-    fn local_add_form(&self) -> Result<LocalAddForm, LocalAddFormError>;
+    type LocalAddFormError;
+    fn local_add_form(&self) -> Result<Vec<(String, String)>, Self::LocalAddFormError>;
 }
 
 #[derive(Debug)]
@@ -380,36 +382,78 @@ impl core::fmt::Display for TaskError {
 
 impl std::error::Error for TaskError {}
 
-impl From<LocalAddFormError> for TaskError {
-    fn from(_e: LocalAddFormError) -> TaskError {
-        todo!("From<LocalAddFormError> for TaskError")
-    }
-}
-
 pub fn extract_task(spec: &impl TaskSpec) -> Result<Task, TaskError> {
     use Task::*;
 
-    use render::keys;
+    use render::{page_names, param_keys, form_names};
 
     let url = spec.url_suffix();
     match (spec.method(), url.as_ref()) {
         (Method::Get, "/") => {
             let mut flags = 0;
-            if let Some(_) = spec.query_param(keys::REFRESH_LOCAL) {
+            if let Some(_) = spec.query_param(param_keys::REFRESH_LOCAL) {
                 flags |= REFRESH_LOCAL;
             }
 
-            if let Some(_) = spec.query_param(keys::REFRESH_REMOTE) {
+            if let Some(_) = spec.query_param(param_keys::REFRESH_REMOTE) {
                 flags |= REFRESH_REMOTE;
             }
 
             Ok(ShowHomePage(flags))
         },
-        (Method::Get, keys::LOCAL_ADD) => {
+        (Method::Get, page_names::LOCAL_ADD) => {
             Ok(ShowLocalAddForm)
         },
-        (Method::Post, keys::LOCAL_ADD) => {
-            spec.local_add_form().map(SubmitLocalAddForm).map_err(From::from)
+        (Method::Post, page_names::LOCAL_ADD) => {
+            spec.local_add_form()
+                .map_err(|e| TaskError(e.to_string()))
+                .and_then(|pairs| {
+                    let mut path = PathBuf::default();
+
+                    let mut title = None;
+                    let mut summary = None;
+                    let mut content = None;
+                    // I predict that there will almost always be exactly 1 link.
+                    let mut links = Vec::with_capacity(1);
+
+                    for (k, v) in pairs {
+                        match k.as_str() {
+                            form_names::TARGET => {
+                                path = PathBuf::from(v);
+                            }
+                            form_names::TITLE => {
+                                title = Some(v);
+                            }
+                            form_names::SUMMARY => {
+                                summary = Some(v);
+                            }
+                            form_names::CONTENT => {
+                                content = Some(v);
+                            }
+                            form_names::LINK => {
+                                // TODO confirm we can actually get multiple links
+                                // here. We might need to encode multiple links into
+                                // one string, or just only allow one link.
+                                links.push(v);
+                            }
+                            _ => {
+                                return Err(TaskError(format!(
+                                    "Unhandled Form pair ({k}, {v})"
+                                )))
+                            }
+                        }
+                    }
+
+                    Ok(SubmitLocalAddForm(LocalAddForm {
+                        path,
+                        post: Post {
+                            title,
+                            summary,
+                            content,
+                            links,
+                        },
+                    }))
+                })
         },
         (method, _) => {
             Err(TaskError(

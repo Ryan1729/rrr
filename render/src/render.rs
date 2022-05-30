@@ -213,7 +213,7 @@ pub fn local_add_form<Trget: Target>(
             write!(
                 o,
                 "<form>\
-                    <select>"
+                    <select name='{TARGET}'>"
             )?;
 
             for target in local_add_targets {
@@ -261,13 +261,29 @@ pub fn local_add_form_success(
     )
 }
 
-pub mod keys {
+/// URL param keys.
+pub mod param_keys {
     pub const REFRESH_LOCAL: &str = "refresh-local";
     pub const REFRESH_REMOTE: &str = "refresh-remote";
+}
+use param_keys::*;
 
+/// Names for pages; AKA parts of URLs.
+pub mod page_names {
     pub const LOCAL_ADD: &str = "/local-add";
 }
-use keys::*;
+use page_names::*;
+
+/// Form element names.
+pub mod form_names {
+    pub const TARGET: &str = "target";
+
+    pub const TITLE: &str = "title";
+    pub const SUMMARY: &str = "summary";
+    pub const CONTENT: &str = "content";
+    pub const LINK: &str = "link";
+}
+use form_names::*;
 
 fn main_template<O>(
     output: &mut O,

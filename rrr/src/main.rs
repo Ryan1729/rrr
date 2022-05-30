@@ -48,7 +48,7 @@ fn inner_main() -> Res<()> {
             .to_owned()
     };
 
-    let state = logic::State::try_from(data_dir)?;    
+    let state = logic::State::try_from(data_dir)?;
 
     {
         let displayed_dir = state.root_display();
@@ -69,6 +69,7 @@ impl <'request> logic::TaskSpec for TaskSpec<'request> {
     fn method(&self) -> Method {
         match self.0.method() {
             "GET" => Method::Get,
+            "POST" => Method::Post,
             _ => Method::Other,
         }
     }
@@ -81,9 +82,12 @@ impl <'request> logic::TaskSpec for TaskSpec<'request> {
         self.0.get_param(key)
     }
 
+    type LocalAddFormError = rouille::input::post::PostError;
     fn local_add_form(&self)
-    -> Result<logic::LocalAddForm, logic::LocalAddFormError> {
-        todo!("local_add_form")
+    -> Result<Vec<(String, String)>, Self::LocalAddFormError> {
+        rouille::input::post::raw_urlencoded_post_input(
+            &self.0
+        )
     }
 }
 
