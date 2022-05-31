@@ -95,12 +95,12 @@ fn start(addr: SocketAddr, state: logic::State) -> ! {
     let state_mutex = std::sync::Mutex::new(state);
 
     start_server(addr, move |request| {
-        let task: logic::Task = try_or_400!(
-            logic::extract_task(&TaskSpec(&request))
-        );
-
         match state_mutex.lock() {
             Ok(ref mut state) => {
+                let task: logic::Task = try_or_400!(
+                    logic::extract_task(&TaskSpec(&request), state)
+                );
+
                 match state.perform(task) {
                     Ok(output) => extract_response(output),
                     Err(e) => {
