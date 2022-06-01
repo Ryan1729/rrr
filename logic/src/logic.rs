@@ -93,34 +93,41 @@ fn fetch_remote_feeds(
 
 const LOCAL_FEEDS: &str = "local-feeds";
 
-/// `output` will be cleared before being filled with the current posts.
-/// `paths` will be cleared before being filled with the current paths.
+/// `output` will be cleared before being filled with the current paths and posts.
 fn load_local_posts(
     output: &mut LocalPosts,
     local_feeds_dir: &LocalFeedsDir,
     utc_offset: UtcOffset,
 ) -> std::io::Result<()> {
-    let now = Timestamp::now_at_offset(utc_offset);
-    // Set the timestamp first, so that if we add an auto refresh later, errors won't
-    // cause a tight retry loop.
-    for posts in output.values_mut() {
-        posts.posts.clear();
-        posts.fetched_at = now;
-    }
-
     load_local_feed_paths(output, local_feeds_dir)?;
 
     for (path, posts) in output.iter_mut() {
         // TODO is it worth switching to reusing a single buffer across iterations?
         let buffer = std::fs::read_to_string(path)?;
 
-        syndicated::parse_items(
+        load_local_post_from_buffer(
+            posts,
             std::io::Cursor::new(&buffer),
-            &mut posts.posts,
+            utc_offset,
         );
     }
 
     Ok(())
+}
+
+/// `output` will be cleared before being filled with the current posts.
+fn load_local_post_from_buffer(
+    output: &mut Posts,
+    feed_buffer: impl std::io::BufRead + std::io::Seek,
+    utc_offset: UtcOffset,
+) {
+    output.posts.clear();
+    output.fetched_at = Timestamp::now_at_offset(utc_offset);
+
+    syndicated::parse_items(
+        feed_buffer,
+        &mut output.posts,
+    );
 }
 
 /// Any existing lists of posts will be left alone.
@@ -588,16 +595,17 @@ impl State {
                 )?;
             }
             SubmitLocalAddForm(form) => {
-                match add_local_feed(
+                match add_local_post(
                     self.local_posts
                         .get_mut(&form.path)
                         .ok_or(PerformError::MissingLocalFile)?,
-                    form
+                    form,
+                    self.utc_offset,
                 ) {
                     Ok(()) => {
                         render::local_add_form_success(&mut output)?
                     }
-                    Err(form) => {
+                    Err((form, e)) => {
                         render::local_add_form(
                             &mut output,
                             self.local_posts
@@ -611,7 +619,10 @@ impl State {
                                 local_posts: &self.local_posts,
                                 remote_posts: &self.remote_posts,
                             },
-                            Some(self.previous_form(&form, &self.root))
+                            Some((
+                                self.previous_form(&form, &self.root),
+                                &e.to_string()
+                            ))
                         )?;
                     }
                 }
@@ -635,12 +646,43 @@ impl State {
     }
 }
 
-fn add_local_feed(
-    _posts: &mut Posts,
-    _form: LocalAddForm
-) -> Result<(), LocalAddForm> {
-    // Will probably need to return an error message as well.
-    todo!("add_local_feed")
+fn add_local_post(
+    posts: &mut Posts,
+    form: LocalAddForm,
+    utc_offset: UtcOffset,
+) -> Result<(), (LocalAddForm, Box<dyn std::error::Error>)> {
+    // `q` is short for "question mark" since this is like `?`.
+    macro_rules! q {
+        ($expr: expr) => {
+            match $expr {
+                Ok(thing) => thing,
+                Err(e) => return Err((form, Box::from(e))),
+            }
+        }
+    }
+
+    {
+        let buffer = q!(std::fs::read_to_string(&form.path));
+    
+        q!(write_atomically::write_atomically(
+            &form.path,
+            |file| syndicated::add_post(
+                file,
+                std::io::Cursor::new(&buffer),
+                form.post.clone(),
+            )
+        ));
+    }
+
+    let buffer = q!(std::fs::read_to_string(&form.path));
+
+    load_local_post_from_buffer(
+        posts,
+        std::io::Cursor::new(&buffer),
+        utc_offset,
+    );
+
+    Ok(())
 }
 
 fn ensure_directory(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {

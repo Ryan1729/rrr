@@ -205,21 +205,25 @@ pub fn local_add_form<Trget: Target>(
     output: &mut impl Output,
     local_add_targets: impl Iterator<Item = Trget>,
     root_display: &impl RootDisplay,
-    previous: Option<LocalAddForm<Trget>>,
+    previous: Option<(LocalAddForm<Trget>, &str)>,
 ) -> Result {
     main_template(
         output,
         |o| {
-            write!(
-                o,
-                "<form>\
-                    <select name='{TARGET}'>"
-            )?;
+            
+
+            write!(o, "<form>")?;
+
+            if let Some((_, error_message)) = &previous {
+                write!(o, "{error_message}")?;
+            }
+
+            write!(o, "<select name='{TARGET}'>")?;
 
             for target in local_add_targets {
                 let selected = if
                     Some(&target)
-                    == previous.as_ref().map(|p| &p.target) {
+                    == previous.as_ref().map(|(form, _)| &form.target) {
                     "selected"
                 } else {
                     ""

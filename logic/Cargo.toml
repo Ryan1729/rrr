@@ -11,4 +11,6 @@ fetch = { path = "../fetch" }
 render = { path = "../render" }
 syndicated = { path = "../syndicated" }
 timestamp = { path = "../timestamp" }
+write_atomically = { path = "../write_atomically" }
+
 

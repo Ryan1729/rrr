@@ -10,3 +10,6 @@ path = "src/syndicated.rs"
 render = { path = "../render" }
 rss = "2.0"
 atom_syndication = "0.11"
+chrono = "0.4"
+digest = "0.9"
+meowhash = "0.3"
