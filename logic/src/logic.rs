@@ -440,6 +440,12 @@ pub fn extract_task(
                     let mut links = Vec::with_capacity(1);
 
                     for (k, v) in pairs {
+                        // TODO `NonEmptyString` type so we don't need to do this
+                        // as manually/carefully.
+                        if v.is_empty() {
+                            continue;
+                        }
+
                         match k.as_str() {
                             form_names::TARGET => {
                                 path = PathBuf::from(v);
@@ -591,7 +597,10 @@ impl State {
                         local_posts: &self.local_posts,
                         remote_posts: &self.remote_posts,
                     },
-                    None,
+                    Option::<(
+                        render::LocalAddForm<'_, '_, '_, '_, Target<'_, '_>, String>,
+                        &str
+                    )>::None,
                 )?;
             }
             SubmitLocalAddForm(form) => {
@@ -636,12 +645,16 @@ impl State {
         &'root self,
         form: &'path LocalAddForm,
         root: &'root Root
-    ) -> render::LocalAddForm<Target<'path, 'root>> {
+    ) -> render::LocalAddForm<'path, 'path, 'path, 'path, Target<'path, 'root>, String> {
         render::LocalAddForm {
             target: Target{
                 path: form.path.as_ref(),
                 root,
             },
+            title: form.post.title.as_ref().map(|s| s.as_str()).unwrap_or_default(),
+            summary: form.post.summary.as_ref().map(|s| s.as_str()).unwrap_or_default(),
+            content: form.post.content.as_ref().map(|s| s.as_str()).unwrap_or_default(),
+            links: &form.post.links,
         }
     }
 }

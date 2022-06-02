@@ -167,11 +167,7 @@ pub fn home_page<'data>(
 
             feeds(o, data)?;
 
-            write!(
-                o,
-                "<footer>{}</footer>",
-                data.root_display()
-            )
+            footer(o, data)
         }
     )
 }
@@ -197,33 +193,83 @@ where
     fn value(&self) -> Self::Value;
 }
 
-pub struct LocalAddForm<Target> {
+pub struct LocalAddForm<
+    'title,
+    'summary,
+    'content,
+    'links,
+    Target,
+    S,
+> {
     pub target: Target,
+    pub title: &'title str,
+    pub summary: &'summary str,
+    pub content: &'content str,
+    pub links: &'links [S],
 }
 
-pub fn local_add_form<Trget: Target>(
+pub fn local_add_form<
+    'title,
+    'summary,
+    'content,
+    'links,
+    Trget: Target,
+    S: AsRef<str>,
+>(
     output: &mut impl Output,
     local_add_targets: impl Iterator<Item = Trget>,
     root_display: &impl RootDisplay,
-    previous: Option<(LocalAddForm<Trget>, &str)>,
+    previous: Option<(
+        LocalAddForm<
+            'title,
+            'summary,
+            'content,
+            'links,
+            Trget,
+            S,
+        >,
+        &str
+    )>,
 ) -> Result {
     main_template(
         output,
         |o| {
-            
+            // TODO move this to the head tag, if it matters later, I guess?
+            // The perf difference if any, doesn't seem significant.
+            write!(
+                o,
+                "<style>\
+                     form {{ display: table; }}\
+                        p {{ display: table-row; }}\
+                   select {{ display: table-cell; }}\
+                    label {{ display: table-cell; text-align: right }}\
+                    input {{ display: table-cell; }}\
+                </style>"
+            )?;
 
-            write!(o, "<form>")?;
+            write!(
+                o,
+                "\
+                <form>"
+            )?;
 
             if let Some((_, error_message)) = &previous {
                 write!(o, "{error_message}")?;
             }
 
-            write!(o, "<select name='{TARGET}'>")?;
+            let form = previous.map(|(form, _)| form);
+
+            write!(
+                o,
+                "<p>\
+                    <label for='{TARGET}'>Target file</label>\
+                    <select name='{TARGET}'>"
+            )?;
 
             for target in local_add_targets {
                 let selected = if
                     Some(&target)
-                    == previous.as_ref().map(|(form, _)| &form.target) {
+                    == form.as_ref().map(|form| &form.target) {
                     "selected"
                 } else {
                     ""
@@ -237,19 +283,57 @@ pub fn local_add_form<Trget: Target>(
                 )?;
             }
 
+            let (title, summary, content, link_2, link_1) = form.map(|form| (
+               form.title,
+               form.summary,
+               form.content,
+               form.links.get(1).map(|s| s.as_ref()).unwrap_or_default(),
+               form.links.get(0).map(|s| s.as_ref()).unwrap_or_default(),
+            )).unwrap_or_default();
+
             write!(
                 o,
                 "\
                     </select>\
-                    <input type='submit' formmethod='post'>\
-                </form>"
+                </p>\
+                <p>\
+                    <label for='{TITLE}'>Title</label>\
+                    <input name='{TITLE}' id='{TITLE}' size=128>\
+                        {title}\
+                    </input>\
+                </p>\
+                <p>\
+                    <label for='{SUMMARY}'>Summary</label>\
+                    <input name='{SUMMARY}' id='{SUMMARY}' size=128>\
+                        {summary}\
+                    </input>\
+                </p>\
+                <p>\
+                    <label for='{CONTENT}'>Content</label>\
+                    <textarea name='{CONTENT}' id='{CONTENT}' rows=5 cols=128>\
+                        {content}\
+                    </textarea>\
+                </p>\
+                <p>\
+                    <label for='{LINK}1'>Link</label>\
+                    <input type='url' id='{LINK}1' name='{LINK}' size=128>\
+                        {link_1}\
+                    </input>\
+                </p>\
+                <p>\
+                    <label for='{LINK}2'>Link</label>\
+                    <input type='url' id='{LINK}2' name='{LINK}' size=128>\
+                        {link_2}\
+                    </input>\
+                </p>\
+                <p>\
+                    <label for='submit'></label>\
+                    <input type='submit' id='submit' formmethod='post'>\
+                </p>\
+            </form>"
             )?;
 
-            write!(
-                o,
-                "<footer>{}</footer>",
-                root_display.root_display()
-            )
+            footer(o, root_display)
         }
     )
 }
@@ -262,6 +346,17 @@ pub fn local_add_form_success(
         |o| {
             write!(o, "Successfully added local post")
         }
+    )
+}
+
+fn footer<'data>(
+    o: &mut impl Output,
+    root_display: &impl RootDisplay
+) -> Result {
+    write!(
+        o,
+        "<footer>{}</footer>",
+        root_display.root_display()
     )
 }
 
@@ -291,7 +386,7 @@ use form_names::*;
 
 fn main_template<O>(
     output: &mut O,
-    body: impl FnOnce(&mut O) -> Result
+    body: impl FnOnce(&mut O) -> Result,
 ) -> Result
 where O: Output
 {
@@ -300,7 +395,7 @@ where O: Output
     // See https://html.spec.whatwg.org/multipage/syntax.html#syntax-tag-omission
     const HEADER: &str = "\
         <!DOCTYPE HTML>\
-        <style> body { color: #eee; background-color: #222 } </style>
+        <style> * { color: #eee; background-color: #222 } </style>
         <title>RRR</title>\n\
     ";
 
