@@ -36,7 +36,10 @@ fn inner_main() -> Res<()> {
 
     println!("Address: {addr}");
 
-    let data_dir = if let Some(data_dir_override) = args.next() {
+    let data_dir = if let Some(data_dir_override) = args.next()
+        // Treat an empty arg as no arg.
+        .and_then(|s| (!s.is_empty()).then(|| s))
+    {
         PathBuf::try_from(data_dir_override)?
     } else {
         directories::ProjectDirs::from("com", "ryanwiedemann", APP_NAME)
