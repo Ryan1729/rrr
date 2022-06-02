@@ -298,15 +298,15 @@ pub fn local_add_form<
                 </p>\
                 <p>\
                     <label for='{TITLE}'>Title</label>\
-                    <input name='{TITLE}' id='{TITLE}' size=128>\
-                        {title}\
-                    </input>\
+                    <input \
+                        name='{TITLE}' id='{TITLE}' size=128 value='{title}'\
+                    >\
                 </p>\
                 <p>\
                     <label for='{SUMMARY}'>Summary</label>\
-                    <input name='{SUMMARY}' id='{SUMMARY}' size=128>\
-                        {summary}\
-                    </input>\
+                    <input \
+                        name='{SUMMARY}' id='{SUMMARY}' size=128 value='{summary}'\
+                    >\
                 </p>\
                 <p>\
                     <label for='{CONTENT}'>Content</label>\
@@ -316,15 +316,17 @@ pub fn local_add_form<
                 </p>\
                 <p>\
                     <label for='{LINK}1'>Link</label>\
-                    <input type='url' id='{LINK}1' name='{LINK}' size=128>\
-                        {link_1}\
-                    </input>\
+                    <input \
+                        type='url' \
+                        id='{LINK}1' name='{LINK}' size=128 value='{link_1}'\
+                    >\
                 </p>\
                 <p>\
                     <label for='{LINK}2'>Link</label>\
-                    <input type='url' id='{LINK}2' name='{LINK}' size=128>\
-                        {link_2}\
-                    </input>\
+                    <input \
+                        type='url' \
+                        id='{LINK}2' name='{LINK}' size=128 value='{link_2}'\
+                    >\
                 </p>\
                 <p>\
                     <label for='submit'></label>\
