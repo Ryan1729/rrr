@@ -12,6 +12,17 @@ pub type Result<A = ()> = core::result::Result<A, Error>;
 /// A way to incrementally output HTML.
 pub trait Output: core::fmt::Write {}
 
+pub enum RefreshKind {
+    Local,
+    Remote,
+    RemoteUrls,
+}
+
+pub struct RefreshTimestamp<Timestamp> {
+    pub kind: RefreshKind,
+    pub timestamp: Timestamp,
+}
+
 pub enum SectionKind {
     Local,
     Remote,
@@ -46,16 +57,20 @@ where
     Self::Link: AsRef<str> + 'posts,
     Self::PostHolder: PostHolder<Self::Link>,
     Self::Posts: Iterator<Item = Self::PostHolder>,
+    Self::RefreshTimestamps: Iterator<Item = RefreshTimestamp<Self::Timestamp>>,
     Self::Sections: Iterator<Item = Section<Self::Posts, Self::Timestamp>>,
     Self::Timestamp: Display,
 {
     type Link;
     type PostHolder;
     type Posts;
+    type RefreshTimestamps;
     type Sections;
     type Timestamp;
 
     fn post_sections(&self) -> Self::Sections;
+
+    fn refresh_timestamps(&self) -> Self::RefreshTimestamps;
 }
 
 /// This may be an overly naive representation. But it seems best to go with the
@@ -72,13 +87,15 @@ fn controls<'data>(
     output: &mut impl Output,
     data: &impl Data<'data>
 ) -> Result {
-    use SectionKind::*;
-    for section in data.post_sections() {
-        let (label, refresh_key) = match section.kind {
-            Local => ("Refresh Local Posts", REFRESH_LOCAL),
-            Remote => ("Refresh Remote Posts", REFRESH_REMOTE),
+    use RefreshKind::*;
+
+    for r_t in data.refresh_timestamps() {
+        let (label, qualifier, refresh_key) = match r_t.kind {
+            Local => ("Refresh Local Posts", " (taking oldest)", REFRESH_LOCAL),
+            Remote => ("Refresh Remote Posts", "", REFRESH_REMOTE),
+            RemoteUrls => ("Refresh Remote Feed URLs", "", REFRESH_REMOTE_URLS),
         };
-        let timestamp = section.timestamp;
+        let timestamp = r_t.timestamp;
 
         write!(
             output,
@@ -86,7 +103,7 @@ fn controls<'data>(
             <form>\
               <button \
                 type='submit' \
-                title='Fresh as of {timestamp}'\
+                title='Fresh as of {timestamp}{qualifier}'\
               >\
                 {label}\
               </button>\
@@ -96,7 +113,8 @@ fn controls<'data>(
         )?;
     }
 
-    write!(output, "<a href='{LOCAL_ADD}'>Add local entry</a>")
+    write!(output, "<div><a href='{LOCAL_ADD}'>Add local entry</a></div>")?;
+    write!(output, "<div><a href='{REMOTE_ADD}'>Add remote feed</a></div>")
 }
 
 fn feeds<'data>(
@@ -236,6 +254,8 @@ pub fn local_add_form<
         |o| {
             // TODO move this to the head tag, if it matters later, I guess?
             // The perf difference if any, doesn't seem significant.
+            // TODO reduce duplication with similar style tags, if this gets
+            // copy-pasted again?
             write!(
                 o,
                 "<style>\
@@ -340,14 +360,85 @@ pub fn local_add_form<
     )
 }
 
+pub struct RemoteFeedAddForm<'url> {
+    pub url: &'url str,
+}
+
+pub fn remote_feed_add_form<'url>(
+    output: &mut impl Output,
+    root_display: &impl RootDisplay,
+    previous: Option<(
+        RemoteFeedAddForm<'url>,
+        &str
+    )>,
+) -> Result {
+    main_template(
+        output,
+        |o| {
+            // TODO move this to the head tag, if it matters later, I guess?
+            // The perf difference if any, doesn't seem significant.
+            // TODO reduce duplication with similar style tags, if this gets
+            // copy-pasted again?
+            write!(
+                o,
+                "<style>\
+                     form {{ display: table; }}\
+                        p {{ display: table-row; }}\
+                    label {{ display: table-cell; text-align: right }}\
+                    input {{ display: table-cell; }}\
+                </style>"
+            )?;
+
+            write!(
+                o,
+                "\
+                <form>"
+            )?;
+
+            if let Some((_, error_message)) = &previous {
+                write!(o, "{error_message}")?;
+            }
+
+            let form = previous.map(|(form, _)| form);
+
+            let url = form.map(|form| form.url).unwrap_or_default();
+
+            write!(
+                o,
+                "\
+                <p>\
+                    <label for='{FEED_URL}'>Feed URL</label>\
+                    <input \
+                        name='{FEED_URL}' id='{FEED_URL}' size=128 value='{url}'\
+                    >\
+                </p>\
+                <p>\
+                    <label for='submit'></label>\
+                    <input type='submit' id='submit' formmethod='post'>\
+                </p>\
+            </form>"
+            )?;
+
+            footer(o, root_display)
+        }
+    )
+}
+
 pub fn local_add_form_success(
     output: &mut impl Output,
 ) -> Result {
     main_template(
         output,
-        |o| {
-            write!(o, "Successfully added local post")
-        }
+        |o| write!(o, "Successfully added local post")
+    )
+}
+
+pub fn remote_feed_add_form_success(
+    output: &mut impl Output,
+) -> Result {
+    main_template(
+        output,
+        |o| write!(o, "Successfully added remote post")
     )
 }
 
@@ -366,12 +457,14 @@ fn footer<'data>(
 pub mod param_keys {
     pub const REFRESH_LOCAL: &str = "refresh-local";
     pub const REFRESH_REMOTE: &str = "refresh-remote";
+    pub const REFRESH_REMOTE_URLS: &str = "refresh-remote-urls";
 }
 use param_keys::*;
 
 /// Names for pages; AKA parts of URLs.
 pub mod page_names {
     pub const LOCAL_ADD: &str = "/local-add";
+    pub const REMOTE_ADD: &str = "/remote-add";
 }
 use page_names::*;
 
@@ -383,6 +476,8 @@ pub mod form_names {
     pub const SUMMARY: &str = "summary";
     pub const CONTENT: &str = "content";
     pub const LINK: &str = "link";
+
+    pub const FEED_URL: &str = "feed-url";
 }
 use form_names::*;
 

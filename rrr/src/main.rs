@@ -92,6 +92,14 @@ impl <'request> logic::TaskSpec for TaskSpec<'request> {
             &self.0
         )
     }
+
+    type RemoteFeedAddFormError = rouille::input::post::PostError;
+    fn remote_feed_add_form(&self)
+    -> Result<Vec<(String, String)>, Self::RemoteFeedAddFormError> {
+        rouille::input::post::raw_urlencoded_post_input(
+            &self.0
+        )
+    }
 }
 
 fn start(addr: SocketAddr, state: logic::State) -> ! {

@@ -1,12 +1,15 @@
 use time::{OffsetDateTime as ODT, UtcOffset as UO};
 
 /// A local-time timestamp.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Timestamp(ODT);
 
 impl Timestamp {
     pub const DEFAULT: Timestamp = Timestamp(ODT::UNIX_EPOCH);
+    pub const MAX: Timestamp = Timestamp(
+        ODT::UNIX_EPOCH.saturating_add(time::Duration::MAX)
+    );
 }
 
 impl core::fmt::Display for Timestamp {
