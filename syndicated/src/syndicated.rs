@@ -49,7 +49,11 @@ pub fn add_post(
     entry.updated = now;
     entry.published = Some(now);
 
-    let title = post.title.unwrap_or_else(|| now.to_rfc3339());
+    let title = post.title.unwrap_or_else(
+        || post.links.get(0)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| now.to_rfc3339())
+    );
 
     hasher.update(&title);
     for content in post.content.as_ref() {
