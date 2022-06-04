@@ -438,7 +438,7 @@ pub fn remote_feed_add_form_success(
 ) -> Result {
     main_template(
         output,
-        |o| write!(o, "Successfully added remote post")
+        |o| write!(o, "Successfully added remote feed")
     )
 }
 
