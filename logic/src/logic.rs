@@ -74,7 +74,7 @@ fn fetch_remote_feeds(
         posts.posts.clear();
         posts.fetched_at = now;
 
-        let mut reader = fetch::get(feed)
+        let mut reader = fetch::get(&feed.url)
             .map_err(FetchRemoteFeedsError::Fetch)?;
 
         let mut buffer = String::with_capacity(4096);
@@ -211,7 +211,18 @@ mod local_feed_path {
 use local_feed_path::{BadPrefixError, LocalFeedPath};
 
 type LocalPosts = BTreeMap<LocalFeedPath, Posts>;
-type RemotePosts = BTreeMap<Url, Posts>;
+type RemotePosts = BTreeMap<OrderedUrl, Posts>;
+
+// 64k order keys ought to be enough for anybody!
+type OrderKey = u16;
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct OrderedUrl {
+    /// This goes first so the derived `Ord` impl sorts by this, looking at the rest
+    /// of the struct only to break ties.
+    order_key: OrderKey,
+    url: Url,
+}
 
 pub struct State {
     root: Root,
@@ -881,7 +892,7 @@ impl core::fmt::Display for Source<'_> {
 }
 
 struct PostHolder<'posts> {
-    post: &'posts Post, 
+    post: &'posts Post,
     source: Source<'posts>,
 }
 
@@ -929,7 +940,7 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
                 posts: self.local_posts.iter()
                 .flat_map(|(path, posts): (&LocalFeedPath, &Posts)| {
                     posts.posts.iter()
-                        .map(|post| PostHolder{ 
+                        .map(|post| PostHolder{
                             post,
                             source: Source::LocalFeedPath(path),
                         })
@@ -938,11 +949,11 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
            render::Section {
                 kind: render::SectionKind::Remote,
                 posts: self.remote_posts.iter()
-                .flat_map(|(url, posts): (&Url, &Posts)|
+                .flat_map(|(o_url, posts): (&OrderedUrl, &Posts)|
                     posts.posts.iter()
-                        .map(|post| PostHolder{ 
+                        .map(|post| PostHolder{
                             post,
-                            source: Source::Url(url)
+                            source: Source::Url(&o_url.url)
                         })
                 ).collect::<Vec<_>>().into_iter()
             }
@@ -1028,11 +1039,19 @@ fn load_remote_feed_urls(
         &mut remote_feeds_string,
     ).map_err(E::Io)?;
 
-    for line in remote_feeds_string.lines() {
+    for (i, line) in remote_feeds_string.lines().enumerate() {
         let url = Url::parse(line)
             .map_err(E::UrlParse)?;
 
-        remote_posts.entry(url).or_insert_with(||
+        remote_posts.entry(
+            OrderedUrl{
+                url,
+                // Truncating here seems fine, in that things would keep working,
+                // but the order would loop, which would likely alert me to the
+                // issue, without being verly disruptive. Also, when will we run
+                // out of these, really?
+                order_key: i as _
+            }).or_insert_with(||
             Posts {
                 posts: Vec::new(),
                 fetched_at: Timestamp::DEFAULT,
