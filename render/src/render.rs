@@ -15,7 +15,6 @@ pub trait Output: core::fmt::Write {}
 pub enum RefreshKind {
     Local,
     Remote,
-    RemoteUrls,
 }
 
 pub struct RefreshTimestamp<Timestamp> {
@@ -28,18 +27,33 @@ pub enum SectionKind {
     Remote,
 }
 
-pub struct Section<Posts, Timestamp> {
+pub struct Section<Posts> {
     pub kind: SectionKind,
     pub posts: Posts,
-    pub timestamp: Timestamp,
+}
+
+/// This may be an overly naive representation. But it seems best to go with the
+/// simplest option that works for the feeds I want to read. We can extend/improve
+/// this as needed.
+pub struct Post<'post, Link> {
+    pub title: Option<&'post str>,
+    pub summary: Option<&'post str>,
+    pub content: Option<&'post str>,
+    pub links: &'post [Link],
 }
 
 /// A way to access a `Post` which may or may not ultimately own it.
-pub trait PostHolder<Link>
+pub trait PostHolder
 where
-    Link: AsRef<str>
+    Self::Link: AsRef<str>,
+    Self::Source: Display,
 {
-    fn get_post(&self) -> Post<'_, Link>;
+    type Link;
+    type Source;
+
+    fn get_post(&self) -> Post<'_, Self::Link>;
+
+    fn source(&self) -> Self::Source;
 }
 
 pub trait RootDisplay
@@ -54,14 +68,12 @@ where
 /// A way to access the data we need for rendering.
 pub trait Data<'posts>: RootDisplay
 where
-    Self::Link: AsRef<str> + 'posts,
-    Self::PostHolder: PostHolder<Self::Link>,
+    Self::PostHolder: PostHolder,
     Self::Posts: Iterator<Item = Self::PostHolder>,
     Self::RefreshTimestamps: Iterator<Item = RefreshTimestamp<Self::Timestamp>>,
-    Self::Sections: Iterator<Item = Section<Self::Posts, Self::Timestamp>>,
+    Self::Sections: Iterator<Item = Section<Self::Posts>>,
     Self::Timestamp: Display,
 {
-    type Link;
     type PostHolder;
     type Posts;
     type RefreshTimestamps;
@@ -73,16 +85,6 @@ where
     fn refresh_timestamps(&self) -> Self::RefreshTimestamps;
 }
 
-/// This may be an overly naive representation. But it seems best to go with the
-/// simplest option that works for the feeds I want to read. We can extend/improve
-/// this as needed.
-pub struct Post<'post, Link> {
-    pub title: Option<&'post str>,
-    pub summary: Option<&'post str>,
-    pub content: Option<&'post str>,
-    pub links: &'post [Link]
-}
-
 fn controls<'data>(
     output: &mut impl Output,
     data: &impl Data<'data>
@@ -90,10 +92,9 @@ fn controls<'data>(
     use RefreshKind::*;
 
     for r_t in data.refresh_timestamps() {
-        let (label, qualifier, refresh_key) = match r_t.kind {
-            Local => ("Refresh Local Posts", " (taking oldest)", REFRESH_LOCAL),
-            Remote => ("Refresh Remote Posts", "", REFRESH_REMOTE),
-            RemoteUrls => ("Refresh Remote Feed URLs", "", REFRESH_REMOTE_URLS),
+        let (label, refresh_key) = match r_t.kind {
+            Local => ("Refresh Local Posts", REFRESH_LOCAL),
+            Remote => ("Refresh Remote Posts", REFRESH_REMOTE),
         };
         let timestamp = r_t.timestamp;
 
@@ -103,7 +104,7 @@ fn controls<'data>(
             <form>\
               <button \
                 type='submit' \
-                title='Fresh as of {timestamp}{qualifier}'\
+                title='Fresh as of {timestamp} (taking oldest)'\
               >\
                 {label}\
               </button>\
@@ -137,8 +138,10 @@ fn feeds<'data>(
         )?;
 
         for (i, post) in section.posts.enumerate() {
+            let source = post.source();
+            write!(output, "#{letter}{i} &ndash; <small>{source}</small>")?;
+
             let post = post.get_post();
-            write!(output, "<p>#{letter}{i}")?;
 
             let mut links = post.links;
 
@@ -164,8 +167,6 @@ fn feeds<'data>(
                 let link = link.as_ref();
                 write!(output, "<a href=\"{link}\">{}</a>", i + 1)?;
             }
-
-            write!(output, "</p>")?;
         }
 
         write!(output, "</details>")?;

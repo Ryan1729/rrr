@@ -12,17 +12,6 @@ pub struct Post {
     pub links: Vec<String>,
 }
 
-impl render::PostHolder<String> for &Post {
-    fn get_post(&self) -> render::Post<'_, String> {
-        render::Post {
-            title: self.title.as_deref(),
-            summary: self.summary.as_deref(),
-            content: self.content.as_deref(),
-            links: &self.links,
-        }
-    }
-}
-
 pub type AddError = atom_syndication::Error;
 
 pub fn add_post(

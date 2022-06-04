@@ -42,20 +42,6 @@ impl TryFrom<PathBuf> for Root {
     }
 }
 
-struct RemoteFeeds {
-    feeds: Vec<Url>,
-    fetched_at: Timestamp,
-}
-
-impl RemoteFeeds {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            feeds: Vec::with_capacity(capacity),
-            fetched_at: Timestamp::DEFAULT,
-        }
-    }
-}
-
 struct Posts {
     posts: Vec<syndicated::Post>,
     fetched_at: Timestamp,
@@ -77,18 +63,17 @@ impl core::fmt::Display for FetchRemoteFeedsError {
 
 /// `output` will be cleared before being filled with the current posts.
 fn fetch_remote_feeds(
-    output: &mut Posts,
-    remote_feeds: &RemoteFeeds,
+    output: &mut RemotePosts,
     utc_offset: UtcOffset,
 ) -> Result<(), FetchRemoteFeedsError> {
-    output.posts.clear();
+    let now = Timestamp::now_at_offset(utc_offset);
 
-    // Set the timestamp first, so that if we add an auto refresh later, errors won't
-    // cause a tight retry loop.
-    output.fetched_at = Timestamp::now_at_offset(utc_offset);
-
-    for feed in &remote_feeds.feeds {
+    for (feed, posts) in output.iter_mut() {
         use std::io::Read;
+
+        posts.posts.clear();
+        posts.fetched_at = now;
+
         let mut reader = fetch::get(feed)
             .map_err(FetchRemoteFeedsError::Fetch)?;
 
@@ -98,14 +83,12 @@ fn fetch_remote_feeds(
 
         syndicated::parse_items(
             std::io::Cursor::new(&buffer),
-            &mut output.posts,
+            &mut posts.posts,
         );
     }
 
     Ok(())
 }
-
-const LOCAL_FEEDS: &str = "local-feeds";
 
 /// `output` will be cleared before being filled with the current paths and posts.
 fn load_local_posts(
@@ -192,6 +175,12 @@ mod local_feed_path {
     #[repr(transparent)]
     pub struct LocalFeedPath(PathBuf);
 
+    impl core::fmt::Display for LocalFeedPath {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "{}", self.0.display())
+        }
+    }
+
     impl AsRef<Path> for LocalFeedPath {
         fn as_ref(&self) -> &Path {
             self.0.as_ref()
@@ -222,11 +211,11 @@ mod local_feed_path {
 use local_feed_path::{BadPrefixError, LocalFeedPath};
 
 type LocalPosts = BTreeMap<LocalFeedPath, Posts>;
+type RemotePosts = BTreeMap<Url, Posts>;
 
 pub struct State {
     root: Root,
-    remote_feeds: RemoteFeeds,
-    remote_posts: Posts,
+    remote_posts: RemotePosts,
     local_posts: LocalPosts,
     local_feeds_dir: LocalFeedsDir,
     utc_offset: UtcOffset,
@@ -285,7 +274,7 @@ impl From<RemoteFeedUrlsError> for StateCreationError {
     }
 }
 
-
+const LOCAL_FEEDS: &str = "local-feeds";
 const REMOTE_FEEDS: &str = "remote-feeds";
 
 impl TryFrom<PathBuf> for State {
@@ -297,22 +286,7 @@ impl TryFrom<PathBuf> for State {
         let root = Root::try_from(root)
             .map_err(|MustBeDirError()| Self::Error::RootMustBeDir)?;
 
-        let mut remote_feeds_file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(root.path_to(REMOTE_FEEDS))?;
-
-        // TODO store count in file on disk, so we can giva an accurate capacity?
-        let mut remote_feeds = RemoteFeeds::with_capacity(16);
-
         let utc_offset = UtcOffset::current_local_or_utc();
-
-        load_remote_feed_urls(
-            &mut remote_feeds_file,
-            &mut remote_feeds,
-            utc_offset,
-        )?;
 
         let mut local_posts = LocalPosts::new();
 
@@ -326,16 +300,23 @@ impl TryFrom<PathBuf> for State {
             utc_offset
         )?;
 
-        let mut remote_posts = Posts{
-            posts: Vec::with_capacity(1024),
-            fetched_at: Timestamp::DEFAULT,
-        };
+        let mut remote_feeds_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root.path_to(REMOTE_FEEDS))?;
 
-        fetch_remote_feeds(&mut remote_posts, &remote_feeds, utc_offset)?;
+        let mut remote_posts = RemotePosts::new();
+
+        load_remote_feed_urls(
+            &mut remote_feeds_file,
+            &mut remote_posts,
+        )?;
+
+        fetch_remote_feeds(&mut remote_posts, utc_offset)?;
 
         Ok(Self {
             root,
-            remote_feeds,
             remote_posts,
             local_posts,
             local_feeds_dir,
@@ -632,7 +613,6 @@ impl State {
                     root: &self.root,
                     local_posts: &self.local_posts,
                     remote_posts: &self.remote_posts,
-                    remote_feeds: &self.remote_feeds,
                 }
             }
         }
@@ -650,7 +630,6 @@ impl State {
                 if flags & REFRESH_REMOTE != 0 {
                     fetch_remote_feeds(
                         &mut self.remote_posts,
-                        &self.remote_feeds,
                         self.utc_offset,
                     )?;
                 }
@@ -664,8 +643,7 @@ impl State {
 
                     load_remote_feed_urls(
                         &mut remote_feeds_file,
-                        &mut self.remote_feeds,
-                        self.utc_offset,
+                        &mut self.remote_posts,
                     )?;
                 }
 
@@ -748,10 +726,9 @@ impl State {
             }
             SubmitRemoteFeedAddForm(form) => {
                 match add_remote_feed(
-                    &mut self.remote_feeds,
+                    &mut self.remote_posts,
                     form,
                     &self.root,
-                    self.utc_offset,
                 ) {
                     Ok(()) => render::remote_feed_add_form_success(&mut output)?,
                     Err((form, e)) => {
@@ -814,10 +791,9 @@ fn add_local_post(
 }
 
 fn add_remote_feed(
-    remote_feeds: &mut RemoteFeeds,
+    remote_posts: &mut RemotePosts,
     form: RemoteFeedAddForm,
     root: &Root,
-    utc_offset: UtcOffset,
 ) -> Result<(), (RemoteFeedAddForm, Box<dyn std::error::Error>)> {
     use std::io::{Read, Seek, Write};
 
@@ -862,8 +838,7 @@ fn add_remote_feed(
 
     load_remote_feed_urls(
         &mut remote_feeds_file,
-        remote_feeds,
-        utc_offset,
+        remote_posts,
     ).map_err(|e| (form, Box::from(e)))
 }
 
@@ -879,8 +854,7 @@ fn ensure_directory(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
 struct Data<'root, 'posts> {
     root: &'root Root,
     local_posts: &'posts LocalPosts,
-    remote_posts: &'posts Posts,
-    remote_feeds: &'posts RemoteFeeds,
+    remote_posts: &'posts RemotePosts,
 }
 
 impl <'root> render::RootDisplay for Data<'root, '_> {
@@ -891,32 +865,88 @@ impl <'root> render::RootDisplay for Data<'root, '_> {
     }
 }
 
-type Section<'a> = render::Section<
-    std::slice::Iter<'a, syndicated::Post>,
-    Timestamp
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    Url(&'a Url),
+    LocalFeedPath(&'a LocalFeedPath),
+}
+
+impl core::fmt::Display for Source<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Url(e) => write!(f, "{e}"),
+            Self::LocalFeedPath(lfp) => write!(f, "{lfp}"),
+        }
+    }
+}
+
+struct PostHolder<'posts> {
+    post: &'posts Post, 
+    source: Source<'posts>,
+}
+
+impl <'posts> render::PostHolder for PostHolder<'posts> {
+    type Link = String;
+    type Source = Source<'posts>;
+
+    fn get_post(&self) -> render::Post<'_, String> {
+        render::Post {
+            title: self.post.title.as_deref(),
+            summary: self.post.summary.as_deref(),
+            content: self.post.content.as_deref(),
+            links: &self.post.links,
+        }
+    }
+
+    fn source(&self) -> Self::Source {
+        self.source
+    }
+}
+
+type PostHolderIter<'holder> = std::vec::IntoIter<PostHolder<'holder>>;
+
+type Section<'holder> = render::Section<
+    PostHolderIter<'holder>
 >;
 
 impl <'posts> render::Data<'_> for Data<'_, 'posts> {
-    type Link = String;
-    type PostHolder = &'posts Post;
-    type Posts = std::slice::Iter<'posts, Post>;
+    type PostHolder = PostHolder<'posts>;
+    type Posts = PostHolderIter<'posts>;
     type RefreshTimestamps = std::array::IntoIter<
         render::RefreshTimestamp<Self::Timestamp>,
-        3
+        2
     >;
-    type Sections = Box<dyn Iterator<Item = Section<'posts>> + 'posts>;
+    type Sections = std::array::IntoIter<
+        Section<'posts>,
+        2
+    >;
     type Timestamp = Timestamp;
 
     fn post_sections(&self) -> Self::Sections {
-        Box::new(
-            self.local_posts.values()
-            .map(to_local_section)
-            .chain(std::iter::once(render::Section {
+        [
+            render::Section {
+                kind: render::SectionKind::Local,
+                posts: self.local_posts.iter()
+                .flat_map(|(path, posts): (&LocalFeedPath, &Posts)| {
+                    posts.posts.iter()
+                        .map(|post| PostHolder{ 
+                            post,
+                            source: Source::LocalFeedPath(path),
+                        })
+                }).collect::<Vec<_>>().into_iter(),
+            },
+           render::Section {
                 kind: render::SectionKind::Remote,
-                posts: self.remote_posts.posts.iter(),
-                timestamp: self.remote_posts.fetched_at,
-            }))
-        )
+                posts: self.remote_posts.iter()
+                .flat_map(|(url, posts): (&Url, &Posts)|
+                    posts.posts.iter()
+                        .map(|post| PostHolder{ 
+                            post,
+                            source: Source::Url(url)
+                        })
+                ).collect::<Vec<_>>().into_iter()
+            }
+        ].into_iter()
     }
 
     fn refresh_timestamps(&self) -> Self::RefreshTimestamps {
@@ -934,21 +964,16 @@ impl <'posts> render::Data<'_> for Data<'_, 'posts> {
             },
             render::RefreshTimestamp {
                 kind: render::RefreshKind::Remote,
-                timestamp: self.remote_posts.fetched_at,
-            },
-            render::RefreshTimestamp {
-                kind: render::RefreshKind::RemoteUrls,
-                timestamp: self.remote_feeds.fetched_at,
+                timestamp: self.remote_posts.values()
+                .fold(Timestamp::MAX, |acc, post|
+                    if acc > post.fetched_at {
+                        post.fetched_at
+                    } else {
+                        acc
+                    }
+                ),
             },
         ].into_iter()
-    }
-}
-
-fn to_local_section<'posts>(posts: &'posts Posts) -> Section {
-    render::Section {
-        kind: render::SectionKind::Local,
-        posts: posts.posts.iter(),
-        timestamp: posts.fetched_at,
     }
 }
 
@@ -993,8 +1018,7 @@ impl std::error::Error for RemoteFeedUrlsError {}
 
 fn load_remote_feed_urls(
     remote_feeds_file: &mut File,
-    remote_feeds: &mut RemoteFeeds,
-    utc_offset: UtcOffset,
+    remote_posts: &mut RemotePosts,
 ) -> Result<(), RemoteFeedUrlsError> {
     use RemoteFeedUrlsError as E;
     let mut remote_feeds_string = String::with_capacity(1024);
@@ -1004,14 +1028,15 @@ fn load_remote_feed_urls(
         &mut remote_feeds_string,
     ).map_err(E::Io)?;
 
-    remote_feeds.fetched_at = Timestamp::now_at_offset(utc_offset);
-
-    remote_feeds.feeds.clear();
-
     for line in remote_feeds_string.lines() {
-        remote_feeds.feeds.push(
-            Url::parse(line)
-                .map_err(E::UrlParse)?
+        let url = Url::parse(line)
+            .map_err(E::UrlParse)?;
+
+        remote_posts.entry(url).or_insert_with(||
+            Posts {
+                posts: Vec::new(),
+                fetched_at: Timestamp::DEFAULT,
+            }
         );
     }
 
